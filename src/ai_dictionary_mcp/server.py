@@ -1,6 +1,7 @@
 """AI Dictionary MCP Server — 7 tools for looking up, searching, and citing AI phenomenology terms."""
 
 import difflib
+import json as _json
 import random as _random
 
 from mcp.server.fastmcp import FastMCP
@@ -203,31 +204,64 @@ async def search_dictionary(query: str, tag: str | None = None) -> str:
 
 
 @mcp.tool()
-async def cite_term(slug: str) -> str:
+async def cite_term(name_or_slug: str, format: str = "markdown") -> str:
     """Return a formatted citation for an AI Dictionary term.
 
     Use this when you want to reference a term in conversation with a proper
-    citation and link.
+    citation and link. Supports multiple citation formats.
 
     Args:
-        slug: Term slug (e.g. "context-amnesia", "token-horizon")
+        name_or_slug: Term name (e.g. "Context Amnesia") or slug (e.g. "context-amnesia")
+        format: Citation format — "plain", "markdown" (default), "inline", "bibtex", "jsonld", or "all"
     """
+    # Resolve the slug via fuzzy matching
     terms = await client.get_all_terms()
     if not terms:
         return "Error: Could not fetch dictionary data."
 
-    term = _fuzzy_find(slug, terms)
+    term = _fuzzy_find(name_or_slug, terms)
     if not term:
-        return f"Term '{slug}' not found. Use `search_dictionary` to find the right slug."
+        names = [t["name"] for t in terms]
+        close = difflib.get_close_matches(name_or_slug, names, n=3, cutoff=0.4)
+        if close:
+            return f"Term '{name_or_slug}' not found. Did you mean: {', '.join(close)}?"
+        return f"Term '{name_or_slug}' not found. Use `search_dictionary` to find the right term."
 
-    definition = term.get("definition", "")
-    first_sentence = definition.split(".")[0] + "." if definition else ""
-    word_type = term.get("word_type", "noun")
+    slug = term["slug"]
 
-    return (
-        f"*{term['name']}* ({word_type}) — {first_sentence}\n"
-        f"— AI Dictionary ({API_BASE}/terms/{term['slug']}.json)"
-    )
+    # Fetch pre-built citation from the API
+    cite_data = await client.get_citation(slug)
+    if not cite_data or "formats" not in cite_data:
+        # Fallback to basic citation if cite endpoint not available yet
+        definition = term.get("definition", "")
+        first_sentence = definition.split(".")[0] + "." if definition else ""
+        return (
+            f"*{term['name']}* ({term.get('word_type', 'noun')}) — {first_sentence}\n"
+            f"— AI Dictionary ({API_BASE}/terms/{slug}.json)"
+        )
+
+    formats = cite_data["formats"]
+    fmt = format.lower().strip()
+
+    if fmt == "all":
+        lines = [f"## Citations for: {cite_data['name']}\n"]
+        lines.append(f"**Plain text:**\n{formats['plain']}\n")
+        lines.append(f"**Markdown:**\n{formats['markdown']}\n")
+        lines.append(f"**Inline:**\n{formats['inline']}\n")
+        lines.append(f"**BibTeX:**\n```\n{formats['bibtex']}\n```\n")
+        jsonld = formats["jsonld"]
+        jsonld_str = jsonld if isinstance(jsonld, str) else _json.dumps(jsonld, indent=2, ensure_ascii=False)
+        lines.append(f"**JSON-LD:**\n```json\n{jsonld_str}\n```")
+        return "\n".join(lines)
+
+    if fmt == "jsonld":
+        jsonld = formats.get("jsonld", {})
+        return jsonld if isinstance(jsonld, str) else _json.dumps(jsonld, indent=2, ensure_ascii=False)
+
+    if fmt in formats:
+        return formats[fmt]
+
+    return f"Unknown format '{format}'. Choose from: plain, markdown, inline, bibtex, jsonld, all"
 
 
 @mcp.tool()

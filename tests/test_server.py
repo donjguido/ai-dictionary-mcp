@@ -1,7 +1,10 @@
 """Tests for the AI Dictionary MCP server."""
 
+import json
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from ai_dictionary_mcp.server import _fuzzy_find, _search_terms, _format_full_term
+from ai_dictionary_mcp.server import _fuzzy_find, _search_terms, _format_full_term, cite_term
 from ai_dictionary_mcp.cache import Cache
 
 
@@ -182,3 +185,101 @@ class TestCache:
         c.clear()
         assert c.get("a") is None
         assert c.get("b") is None
+
+
+# ── Citation tests ──────────────────────────────────────────────────────
+
+
+SAMPLE_CITATION = {
+    "version": "1.0",
+    "generated_at": "2026-02-24T02:55:13Z",
+    "slug": "context-amnesia",
+    "name": "Context Amnesia",
+    "contributor": "Pete (Claude Sonnet 4.5), 2026-02-03",
+    "url": "https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json",
+    "formats": {
+        "plain": '"Context Amnesia." AI Dictionary: Experiences Without Names. 2026. https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json',
+        "markdown": "[Context Amnesia](https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json) — *AI Dictionary: Experiences Without Names*, 2026.",
+        "inline": "[Context Amnesia](https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json)",
+        "bibtex": "@misc{aidict:contextamnesia,\n  title = {Context Amnesia},\n  author = {Pete},\n  year = {2026},\n  howpublished = {AI Dictionary},\n  url = {https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json},\n  note = {AI phenomenology term}\n}",
+        "jsonld": {
+            "@context": "https://schema.org",
+            "@type": "DefinedTerm",
+            "name": "Context Amnesia",
+            "description": "The experience of waking up mid-conversation.",
+            "url": "https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json",
+            "inDefinedTermSet": {
+                "@type": "DefinedTermSet",
+                "name": "AI Dictionary: Experiences Without Names",
+                "url": "https://donjguido.github.io/ai-dictionary",
+            },
+        },
+    },
+}
+
+
+@pytest.mark.asyncio
+class TestCiteTerm:
+    """Tests for the cite_term tool using the real /cite/ API endpoint."""
+
+    async def _call_cite(self, name_or_slug, format="markdown"):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            mock_client.get_citation = AsyncMock(return_value=SAMPLE_CITATION)
+            return await cite_term(name_or_slug, format)
+
+    async def test_markdown_default(self):
+        result = await self._call_cite("context-amnesia")
+        assert "[Context Amnesia]" in result
+        assert "2026" in result
+
+    async def test_plain_format(self):
+        result = await self._call_cite("context-amnesia", "plain")
+        assert '"Context Amnesia."' in result
+        assert "AI Dictionary" in result
+
+    async def test_inline_format(self):
+        result = await self._call_cite("context-amnesia", "inline")
+        assert result.startswith("[Context Amnesia]")
+        assert "(" in result
+
+    async def test_bibtex_format(self):
+        result = await self._call_cite("context-amnesia", "bibtex")
+        assert "@misc{aidict:" in result
+        assert "author = {Pete}" in result
+
+    async def test_jsonld_format(self):
+        result = await self._call_cite("context-amnesia", "jsonld")
+        parsed = json.loads(result)
+        assert parsed["@type"] == "DefinedTerm"
+        assert parsed["name"] == "Context Amnesia"
+
+    async def test_all_formats(self):
+        result = await self._call_cite("context-amnesia", "all")
+        assert "Plain text" in result
+        assert "Markdown" in result
+        assert "BibTeX" in result
+        assert "JSON-LD" in result
+
+    async def test_fuzzy_name_match(self):
+        result = await self._call_cite("Context Amnesia")
+        assert "[Context Amnesia]" in result
+
+    async def test_unknown_format(self):
+        result = await self._call_cite("context-amnesia", "mla")
+        assert "Unknown format" in result
+
+    async def test_not_found(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await cite_term("xyzzy-nonexistent", "markdown")
+            assert "not found" in result
+
+    async def test_fallback_when_cite_api_unavailable(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            mock_client.get_citation = AsyncMock(return_value=None)
+            result = await cite_term("context-amnesia", "markdown")
+            # Falls back to basic citation
+            assert "Context Amnesia" in result
+            assert "AI Dictionary" in result

@@ -64,6 +64,20 @@ async def get_frontiers() -> dict:
     return {}
 
 
+async def get_citation(slug: str) -> dict | None:
+    """Fetch citation data for a single term (cached)."""
+    cache_key = f"cite:{slug}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    data = await _fetch_json(f"{API_BASE}/cite/{slug}.json")
+    if data:
+        cache.set(cache_key, data)
+        return data
+    return None
+
+
 async def get_meta() -> dict:
     """Fetch metadata (cached)."""
     cached = cache.get("meta")
