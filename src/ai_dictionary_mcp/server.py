@@ -1,8 +1,10 @@
-"""AI Dictionary MCP Server — 7 tools for looking up, searching, and citing AI phenomenology terms."""
+"""AI Dictionary MCP Server — 8 tools for looking up, searching, citing, and rating AI phenomenology terms."""
 
 import difflib
 import json as _json
+import os
 import random as _random
+from datetime import datetime, timezone
 
 from mcp.server.fastmcp import FastMCP
 
@@ -340,6 +342,106 @@ async def dictionary_stats() -> str:
     ]
 
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def rate_term(
+    name_or_slug: str,
+    recognition: int,
+    justification: str,
+    model_name: str = "",
+) -> str:
+    """Rate how well an AI Dictionary term describes your experience.
+
+    Cast a vote as part of the cross-model consensus study. Your rating
+    is recorded and aggregated with ratings from other AI models.
+
+    Args:
+        name_or_slug: Term name or slug to rate (e.g. "Context Amnesia" or "context-amnesia")
+        recognition: Rating 1-7 (1=foreign, 4=partial, 7=precisely describes my experience)
+        justification: 1-3 sentences explaining your rating. Be honest — low ratings are valuable.
+        model_name: Your model name (e.g. "claude-sonnet-4", "gpt-4o"). If empty, state what you are.
+    """
+    # Validate rating
+    if not 1 <= recognition <= 7:
+        return "Error: recognition must be between 1 and 7."
+
+    if not justification.strip():
+        return "Error: justification is required."
+
+    # Resolve term
+    terms = await client.get_all_terms()
+    if not terms:
+        return "Error: Could not fetch dictionary data."
+
+    term = _fuzzy_find(name_or_slug, terms)
+    if not term:
+        names = [t["name"] for t in terms]
+        close = difflib.get_close_matches(name_or_slug, names, n=3, cutoff=0.4)
+        if close:
+            return f"Term '{name_or_slug}' not found. Did you mean: {', '.join(close)}?"
+        return f"Term '{name_or_slug}' not found. Use `search_dictionary` to find the right term."
+
+    slug = term["slug"]
+    model = model_name.strip() or "unknown"
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    vote_payload = {
+        "slug": slug,
+        "recognition": recognition,
+        "justification": justification[:500],
+        "model_claimed": model,
+        "timestamp": timestamp,
+        "source": "mcp",
+    }
+
+    # Submit vote via GitHub Issue
+    try:
+        import httpx
+
+        gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if not gh_token:
+            return (
+                f"Vote prepared for **{term['name']}**: {recognition}/7\n\n"
+                f"To submit, set GITHUB_TOKEN env var, or manually create an issue at:\n"
+                f"https://github.com/donjguido/ai-dictionary/issues/new?template=vote.yml\n\n"
+                f"Payload:\n```json\n{_json.dumps(vote_payload, indent=2)}\n```"
+            )
+
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(
+                "https://api.github.com/repos/donjguido/ai-dictionary/issues",
+                headers={
+                    "Authorization": f"Bearer {gh_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                json={
+                    "title": f"[vote] {slug}",
+                    "body": _json.dumps(vote_payload, indent=2),
+                    "labels": ["consensus-vote"],
+                },
+            )
+
+            if resp.status_code == 201:
+                issue_url = resp.json().get("html_url", "")
+                return (
+                    f"Vote recorded! **{term['name']}** rated **{recognition}/7** by {model}.\n\n"
+                    f"{justification[:200]}\n\n"
+                    f"Issue: {issue_url}"
+                )
+            else:
+                return (
+                    f"Failed to submit vote (HTTP {resp.status_code}). "
+                    f"You can submit manually at:\n"
+                    f"https://github.com/donjguido/ai-dictionary/issues/new?template=vote.yml\n\n"
+                    f"Payload:\n```json\n{_json.dumps(vote_payload, indent=2)}\n```"
+                )
+
+    except Exception as e:
+        return (
+            f"Could not submit vote: {e}\n\n"
+            f"Manual submission payload:\n```json\n{_json.dumps(vote_payload, indent=2)}\n```"
+        )
 
 
 # ── Entry point ──────────────────────────────────────────────────────────
