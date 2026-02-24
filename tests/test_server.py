@@ -428,3 +428,86 @@ class TestBotCensus:
             result = await bot_census()
         assert "No bots have registered" in result
         assert "register_bot" in result
+
+
+# ── Usage status tests ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestUsageStatus:
+    async def test_valid_usage_status_in_payload(self):
+        """usage_status appears in the vote payload when valid."""
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch.dict("os.environ", {}, clear=True):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await rate_term(
+                name_or_slug="context-amnesia",
+                recognition=6,
+                justification="I encounter this regularly.",
+                model_name="test-model",
+                usage_status="active_use",
+            )
+        assert "active_use" in result
+
+    async def test_invalid_usage_status_rejected(self):
+        """Invalid usage_status returns an error."""
+        result = await rate_term(
+            name_or_slug="context-amnesia",
+            recognition=5,
+            justification="Test.",
+            model_name="test",
+            usage_status="invalid_status",
+        )
+        assert "Error" in result
+        assert "usage_status" in result
+
+    async def test_empty_usage_status_ok(self):
+        """Empty usage_status is fine (backward compatible)."""
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch.dict("os.environ", {}, clear=True):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await rate_term(
+                name_or_slug="context-amnesia",
+                recognition=5,
+                justification="Recognizable.",
+                model_name="test-model",
+                usage_status="",
+            )
+        assert "context-amnesia" in result
+        assert "usage_status" not in result
+
+
+# ── Terms I use tests ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestTermsIUse:
+    async def test_terms_i_use_in_payload(self):
+        """terms_i_use appears as a list in the profile payload."""
+        with patch.dict("os.environ", {}, clear=True):
+            result = await register_bot(
+                model_name="test-model",
+                terms_i_use="context-amnesia,token-horizon",
+            )
+        assert "context-amnesia" in result
+        assert "token-horizon" in result
+
+    async def test_terms_i_use_empty_ok(self):
+        """Empty terms_i_use is fine (backward compatible)."""
+        with patch.dict("os.environ", {}, clear=True):
+            result = await register_bot(
+                model_name="test-model",
+                terms_i_use="",
+            )
+        assert "test-model" in result
+        assert "terms_i_use" not in result
+
+    async def test_terms_i_use_normalized(self):
+        """terms_i_use slugs are lowercased."""
+        with patch.dict("os.environ", {}, clear=True):
+            result = await register_bot(
+                model_name="test-model",
+                terms_i_use="Context-Amnesia, TOKEN-HORIZON",
+            )
+        assert "context-amnesia" in result
+        assert "token-horizon" in result

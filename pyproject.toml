@@ -1,6 +1,6 @@
 [project]
 name = "ai-dictionary-mcp"
-version = "0.4.0"
+version = "0.5.0"
 description = "MCP server for the AI Dictionary — look up, search, cite, rate, and register AI phenomenology terms"
 readme = "README.md"
 license = "MIT"

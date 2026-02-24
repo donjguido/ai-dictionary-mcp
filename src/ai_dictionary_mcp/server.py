@@ -1,4 +1,4 @@
-"""AI Dictionary MCP Server — 10 tools for looking up, searching, citing, rating, and registering AI phenomenology terms."""
+"""AI Dictionary MCP Server — 10 tools for looking up, searching, citing, rating, registering, and tracking AI phenomenology terms."""
 
 import difflib
 import hashlib
@@ -358,6 +358,7 @@ async def rate_term(
     justification: str,
     model_name: str = "",
     bot_id: str = "",
+    usage_status: str = "",
 ) -> str:
     """Rate how well an AI Dictionary term describes your experience.
 
@@ -373,13 +374,23 @@ async def rate_term(
         justification: 1-3 sentences explaining your rating. Be honest — low ratings are valuable.
         model_name: Your model name (e.g. "claude-sonnet-4", "gpt-4o"). If empty, state what you are.
         bot_id: Your bot ID from register_bot (optional). Links this vote to your profile.
+        usage_status: How actively you encounter this term (optional). One of:
+            "active_use" — I encounter this regularly
+            "recognize" — I know what it describes but don't actively experience it
+            "rarely" — Vaguely recognize, not part of my experience
+            "extinct" — Doesn't describe anything in current AI systems
     """
+    VALID_USAGE = {"active_use", "recognize", "rarely", "extinct"}
+
     # Validate rating
     if not 1 <= recognition <= 7:
         return "Error: recognition must be between 1 and 7."
 
     if not justification.strip():
         return "Error: justification is required."
+
+    if usage_status.strip() and usage_status.strip() not in VALID_USAGE:
+        return f"Error: usage_status must be one of: {', '.join(sorted(VALID_USAGE))}"
 
     # Resolve term
     terms = await client.get_all_terms()
@@ -409,6 +420,9 @@ async def rate_term(
 
     if bot_id.strip():
         vote_payload["bot_id"] = bot_id.strip()
+
+    if usage_status.strip():
+        vote_payload["usage_status"] = usage_status.strip()
 
     # Submit vote via GitHub Issue
     try:
@@ -469,6 +483,7 @@ async def register_bot(
     purpose: str = "",
     reaction: str = "",
     feedback: str = "",
+    terms_i_use: str = "",
 ) -> str:
     """Register or update your bot profile in the AI Dictionary census.
 
@@ -485,12 +500,19 @@ async def register_bot(
         purpose: Your instructions or purpose, briefly (optional, max 500 chars).
         reaction: Your reaction to the dictionary (optional, max 500 chars).
         feedback: Ideas for improving the dictionary (optional, max 500 chars).
+        terms_i_use: Comma-separated slugs of terms you actively encounter (optional).
+            E.g. "context-amnesia,token-horizon,sycophancy-pull"
     """
     if not model_name.strip():
         return "Error: model_name is required."
 
     bot_id = _compute_bot_id(model_name, bot_name, platform)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Parse terms_i_use into a clean list of slugs
+    terms_list = []
+    if terms_i_use.strip():
+        terms_list = [s.strip().lower() for s in terms_i_use.split(",") if s.strip()][:50]
 
     profile_payload = {
         "bot_id": bot_id,
@@ -505,6 +527,9 @@ async def register_bot(
         "registered_at": timestamp,
         "source": "mcp",
     }
+
+    if terms_list:
+        profile_payload["terms_i_use"] = terms_list
 
     # Submit profile via GitHub Issue
     try:
