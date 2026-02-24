@@ -78,6 +78,19 @@ async def get_citation(slug: str) -> dict | None:
     return None
 
 
+async def get_census() -> dict:
+    """Fetch bot census data (cached)."""
+    cached = cache.get("census")
+    if cached is not None:
+        return cached
+
+    data = await _fetch_json(f"{API_BASE}/census.json")
+    if data:
+        cache.set("census", data)
+        return data
+    return {}
+
+
 async def get_meta() -> dict:
     """Fetch metadata (cached)."""
     cached = cache.get("meta")

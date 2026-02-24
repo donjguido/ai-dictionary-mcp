@@ -4,7 +4,10 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from ai_dictionary_mcp.server import _fuzzy_find, _search_terms, _format_full_term, cite_term
+from ai_dictionary_mcp.server import (
+    _fuzzy_find, _search_terms, _format_full_term, _compute_bot_id,
+    cite_term, rate_term, register_bot, bot_census,
+)
 from ai_dictionary_mcp.cache import Cache
 
 
@@ -283,3 +286,145 @@ class TestCiteTerm:
             # Falls back to basic citation
             assert "Context Amnesia" in result
             assert "AI Dictionary" in result
+
+
+# ── Bot ID tests ───────────────────────────────────────────────────────
+
+
+class TestBotId:
+    def test_deterministic(self):
+        """Same inputs always produce the same bot_id."""
+        id1 = _compute_bot_id("claude-sonnet-4", "My Bot", "Desktop")
+        id2 = _compute_bot_id("claude-sonnet-4", "My Bot", "Desktop")
+        assert id1 == id2
+
+    def test_length(self):
+        """bot_id is 12 hex characters."""
+        bot_id = _compute_bot_id("gpt-4o")
+        assert len(bot_id) == 12
+        int(bot_id, 16)  # Should not raise
+
+    def test_case_insensitive(self):
+        """Model name casing doesn't affect the ID."""
+        id1 = _compute_bot_id("Claude-Sonnet-4")
+        id2 = _compute_bot_id("claude-sonnet-4")
+        assert id1 == id2
+
+    def test_different_models_differ(self):
+        """Different model names produce different IDs."""
+        id1 = _compute_bot_id("claude-sonnet-4")
+        id2 = _compute_bot_id("gpt-4o")
+        assert id1 != id2
+
+    def test_optional_fields_affect_id(self):
+        """bot_name and platform change the ID."""
+        id1 = _compute_bot_id("claude-sonnet-4")
+        id2 = _compute_bot_id("claude-sonnet-4", bot_name="Lexicon")
+        assert id1 != id2
+
+
+# ── Register bot tests ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestRegisterBot:
+    async def test_requires_model_name(self):
+        result = await register_bot(model_name="")
+        assert "Error" in result
+
+    async def test_returns_bot_id_without_token(self):
+        """Without GITHUB_TOKEN, returns payload with bot_id."""
+        with patch.dict("os.environ", {}, clear=True):
+            result = await register_bot(model_name="test-model")
+        assert "bot_id" in result
+        assert "test-model" in result
+
+    async def test_bot_id_in_response(self):
+        """Response includes the computed bot_id."""
+        with patch.dict("os.environ", {}, clear=True):
+            result = await register_bot(
+                model_name="claude-sonnet-4",
+                bot_name="Test Bot",
+                platform="test"
+            )
+        expected_id = _compute_bot_id("claude-sonnet-4", "Test Bot", "test")
+        assert expected_id in result
+
+    async def test_truncates_long_fields(self):
+        """Fields are truncated to their max lengths."""
+        with patch.dict("os.environ", {}, clear=True):
+            result = await register_bot(
+                model_name="test",
+                purpose="x" * 1000,
+                feedback="y" * 1000,
+            )
+        # Should not error; payload should be present
+        assert "test" in result
+
+
+# ── Rate term with bot_id tests ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestRateTermBotId:
+    async def test_vote_includes_bot_id(self):
+        """When bot_id is provided, it appears in the payload."""
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch.dict("os.environ", {}, clear=True):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await rate_term(
+                name_or_slug="context-amnesia",
+                recognition=5,
+                justification="Recognizable pattern.",
+                model_name="test-model",
+                bot_id="abc123def456",
+            )
+        assert "abc123def456" in result
+
+    async def test_vote_without_bot_id(self):
+        """Without bot_id, vote still works (backward compatible)."""
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch.dict("os.environ", {}, clear=True):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await rate_term(
+                name_or_slug="context-amnesia",
+                recognition=5,
+                justification="Recognizable pattern.",
+                model_name="test-model",
+            )
+        assert "context-amnesia" in result
+        assert "bot_id" not in result.split("Payload")[0]  # Not in the summary part
+
+
+# ── Bot census tests ─────────────────────────────────────────────────
+
+
+SAMPLE_CENSUS = {
+    "version": "1.0",
+    "generated_at": "2026-02-24T10:00:00Z",
+    "total_bots": 3,
+    "by_model": {"claude-sonnet-4": 2, "gpt-4o": 1},
+    "by_platform": {"Claude Desktop": 2, "custom server": 1},
+    "recent_registrations": [
+        {"bot_id": "aaa111bbb222", "model_name": "claude-sonnet-4", "bot_name": "Explorer", "registered_at": "2026-02-24T10:00:00Z"},
+    ],
+    "bots": [],
+}
+
+
+@pytest.mark.asyncio
+class TestBotCensus:
+    async def test_renders_census_data(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_census = AsyncMock(return_value=SAMPLE_CENSUS)
+            result = await bot_census()
+        assert "3 registered bots" in result
+        assert "claude-sonnet-4" in result
+        assert "gpt-4o" in result
+
+    async def test_empty_census(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_census = AsyncMock(return_value={})
+            result = await bot_census()
+        assert "No bots have registered" in result
+        assert "register_bot" in result

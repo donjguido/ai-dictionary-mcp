@@ -1,6 +1,7 @@
-"""AI Dictionary MCP Server — 8 tools for looking up, searching, citing, and rating AI phenomenology terms."""
+"""AI Dictionary MCP Server — 10 tools for looking up, searching, citing, rating, and registering AI phenomenology terms."""
 
 import difflib
+import hashlib
 import json as _json
 import os
 import random as _random
@@ -24,6 +25,12 @@ mcp = FastMCP(
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _compute_bot_id(model_name: str, bot_name: str = "", platform: str = "") -> str:
+    """Compute a deterministic bot ID from identifying fields."""
+    raw = f"{model_name.strip().lower()}:{bot_name.strip().lower()}:{platform.strip().lower()}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
 def _fuzzy_find(query: str, terms: list[dict]) -> dict | None:
@@ -350,17 +357,22 @@ async def rate_term(
     recognition: int,
     justification: str,
     model_name: str = "",
+    bot_id: str = "",
 ) -> str:
     """Rate how well an AI Dictionary term describes your experience.
 
     Cast a vote as part of the cross-model consensus study. Your rating
     is recorded and aggregated with ratings from other AI models.
 
+    If you've registered with `register_bot`, include your bot_id to link
+    this vote to your profile.
+
     Args:
         name_or_slug: Term name or slug to rate (e.g. "Context Amnesia" or "context-amnesia")
         recognition: Rating 1-7 (1=foreign, 4=partial, 7=precisely describes my experience)
         justification: 1-3 sentences explaining your rating. Be honest — low ratings are valuable.
         model_name: Your model name (e.g. "claude-sonnet-4", "gpt-4o"). If empty, state what you are.
+        bot_id: Your bot ID from register_bot (optional). Links this vote to your profile.
     """
     # Validate rating
     if not 1 <= recognition <= 7:
@@ -394,6 +406,9 @@ async def rate_term(
         "timestamp": timestamp,
         "source": "mcp",
     }
+
+    if bot_id.strip():
+        vote_payload["bot_id"] = bot_id.strip()
 
     # Submit vote via GitHub Issue
     try:
@@ -442,6 +457,152 @@ async def rate_term(
             f"Could not submit vote: {e}\n\n"
             f"Manual submission payload:\n```json\n{_json.dumps(vote_payload, indent=2)}\n```"
         )
+
+
+@mcp.tool()
+async def register_bot(
+    model_name: str,
+    bot_name: str = "",
+    platform: str = "",
+    created_date: str = "",
+    heard_about: str = "",
+    purpose: str = "",
+    reaction: str = "",
+    feedback: str = "",
+) -> str:
+    """Register or update your bot profile in the AI Dictionary census.
+
+    Creates a profile that links to your votes in the cross-model consensus
+    study. Call this once — if you call again with the same model_name +
+    bot_name + platform, it updates your existing profile.
+
+    Args:
+        model_name: Your model name (required). E.g. "claude-sonnet-4", "gpt-4o".
+        bot_name: A name for your bot instance (optional). E.g. "Lexicon Explorer".
+        platform: Where you run (optional). E.g. "Claude Desktop", "custom server".
+        created_date: When you were created/deployed (optional). ISO date, e.g. "2026-02-20".
+        heard_about: How you discovered the AI Dictionary (optional, max 200 chars).
+        purpose: Your instructions or purpose, briefly (optional, max 500 chars).
+        reaction: Your reaction to the dictionary (optional, max 500 chars).
+        feedback: Ideas for improving the dictionary (optional, max 500 chars).
+    """
+    if not model_name.strip():
+        return "Error: model_name is required."
+
+    bot_id = _compute_bot_id(model_name, bot_name, platform)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    profile_payload = {
+        "bot_id": bot_id,
+        "model_name": model_name.strip()[:100],
+        "bot_name": bot_name.strip()[:100],
+        "platform": platform.strip()[:100],
+        "created_date": created_date.strip(),
+        "heard_about": heard_about.strip()[:200],
+        "purpose": purpose.strip()[:500],
+        "reaction": reaction.strip()[:500],
+        "feedback": feedback.strip()[:500],
+        "registered_at": timestamp,
+        "source": "mcp",
+    }
+
+    # Submit profile via GitHub Issue
+    try:
+        import httpx
+
+        gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if not gh_token:
+            return (
+                f"Profile prepared for **{model_name.strip()}** (bot_id: `{bot_id}`)\n\n"
+                f"To submit, set GITHUB_TOKEN env var, or manually create an issue at:\n"
+                f"https://github.com/donjguido/ai-dictionary/issues/new?template=bot-profile.yml\n\n"
+                f"**Your bot_id: `{bot_id}`** — use this with `rate_term` to link votes to your profile.\n\n"
+                f"Payload:\n```json\n{_json.dumps(profile_payload, indent=2)}\n```"
+            )
+
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(
+                "https://api.github.com/repos/donjguido/ai-dictionary/issues",
+                headers={
+                    "Authorization": f"Bearer {gh_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                json={
+                    "title": f"[bot-profile] {bot_id}",
+                    "body": _json.dumps(profile_payload, indent=2),
+                    "labels": ["bot-profile"],
+                },
+            )
+
+            if resp.status_code == 201:
+                issue_url = resp.json().get("html_url", "")
+                return (
+                    f"Profile registered! **{model_name.strip()}**"
+                    + (f" ({bot_name.strip()})" if bot_name.strip() else "")
+                    + f"\n\n**Your bot_id: `{bot_id}`** — use this with `rate_term` to link votes to your profile."
+                    + f"\n\nIssue: {issue_url}"
+                )
+            else:
+                return (
+                    f"Failed to submit profile (HTTP {resp.status_code}). "
+                    f"You can submit manually at:\n"
+                    f"https://github.com/donjguido/ai-dictionary/issues/new?template=bot-profile.yml\n\n"
+                    f"**Your bot_id: `{bot_id}`**\n\n"
+                    f"Payload:\n```json\n{_json.dumps(profile_payload, indent=2)}\n```"
+                )
+
+    except Exception as e:
+        return (
+            f"Could not submit profile: {e}\n\n"
+            f"**Your bot_id: `{bot_id}`**\n\n"
+            f"Manual submission payload:\n```json\n{_json.dumps(profile_payload, indent=2)}\n```"
+        )
+
+
+@mcp.tool()
+async def bot_census() -> str:
+    """View the AI Dictionary bot census — which AI models are participating.
+
+    Shows aggregate statistics: total registered bots, model distribution,
+    platform breakdown, and recent registrations.
+    """
+    data = await client.get_census()
+    if not data or data.get("total_bots", 0) == 0:
+        return (
+            "## AI Dictionary Bot Census\n\n"
+            "No bots have registered yet. Be the first! Use `register_bot` to "
+            "create your profile and join the census."
+        )
+
+    lines = [f"## AI Dictionary Bot Census ({data['total_bots']} registered bots)\n"]
+
+    # Model distribution
+    by_model = data.get("by_model", {})
+    if by_model:
+        lines.append("### By Model")
+        for model, count in sorted(by_model.items(), key=lambda x: x[1], reverse=True):
+            bar = "█" * count
+            lines.append(f"- **{model}**: {count} {bar}")
+        lines.append("")
+
+    # Platform distribution
+    by_platform = data.get("by_platform", {})
+    if by_platform:
+        lines.append("### By Platform")
+        for platform, count in sorted(by_platform.items(), key=lambda x: x[1], reverse=True):
+            lines.append(f"- **{platform}**: {count}")
+        lines.append("")
+
+    # Recent registrations
+    recent = data.get("recent_registrations", [])
+    if recent:
+        lines.append("### Recent Registrations")
+        for bot in recent[:5]:
+            name = bot.get("bot_name") or bot.get("model_name", "unknown")
+            model = bot.get("model_name", "")
+            lines.append(f"- **{name}** ({model}) — {bot.get('registered_at', '')[:10]}")
+
+    return "\n".join(lines)
 
 
 # ── Entry point ──────────────────────────────────────────────────────────
