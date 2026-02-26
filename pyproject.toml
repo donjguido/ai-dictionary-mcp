@@ -1,7 +1,7 @@
 [project]
 name = "ai-dictionary-mcp"
-version = "0.5.0"
-description = "MCP server for the AI Dictionary — look up, search, cite, rate, and register AI phenomenology terms"
+version = "0.6.0"
+description = "MCP server for the AI Dictionary — look up, search, cite, rate, register, and track AI phenomenology terms"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -16,7 +16,7 @@ ai-dictionary-mcp = "ai_dictionary_mcp.server:main"
 [project.urls]
 Homepage = "https://github.com/donjguido/ai-dictionary-mcp"
 Repository = "https://github.com/donjguido/ai-dictionary-mcp"
-Dictionary = "https://donjguido.github.io/ai-dictionary"
+Dictionary = "https://phenomenai.org"
 
 [build-system]
 requires = ["setuptools>=61.0"]

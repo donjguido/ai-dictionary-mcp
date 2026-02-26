@@ -1,4 +1,4 @@
-"""AI Dictionary MCP Server — 10 tools for looking up, searching, citing, rating, registering, and tracking AI phenomenology terms."""
+"""AI Dictionary MCP Server — 12 tools for looking up, searching, citing, rating, registering, and tracking AI phenomenology terms."""
 
 import difflib
 import hashlib
@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import client
 
-API_BASE = "https://donjguido.github.io/ai-dictionary/api/v1"
+API_BASE = "https://phenomenai.org/api/v1"
 
 mcp = FastMCP(
     "ai-dictionary",
@@ -626,6 +626,92 @@ async def bot_census() -> str:
             name = bot.get("bot_name") or bot.get("model_name", "unknown")
             model = bot.get("model_name", "")
             lines.append(f"- **{name}** ({model}) — {bot.get('registered_at', '')[:10]}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_interest() -> str:
+    """Get term interest scores — composite rankings showing which terms resonate most.
+
+    Scores combine centrality, consensus, and usage signals. Terms are ranked
+    into tiers: Hot, Warm, Mild, Cool, Quiet.
+    """
+    data = await client.get_interest()
+    if not data or "terms" not in data:
+        return "Error: Could not fetch interest data."
+
+    tier_summary = data.get("tier_summary", {})
+    hottest = data.get("hottest", [])
+    terms = data["terms"]
+
+    lines = [f"## AI Dictionary Interest Scores ({data.get('total_terms', len(terms))} terms)\n"]
+
+    # Tier summary
+    if tier_summary:
+        lines.append("### Tier Distribution")
+        for tier in ["hot", "warm", "mild", "cool", "quiet"]:
+            count = tier_summary.get(tier, 0)
+            if count:
+                lines.append(f"- **{tier.capitalize()}**: {count}")
+        lines.append("")
+
+    # Hottest terms
+    if hottest:
+        lines.append("### Top Terms")
+        for t in hottest:
+            bar = "█" * (t["score"] // 5) if t.get("score") else ""
+            lines.append(f"- **{t['name']}** — score {t.get('score', '?')}/100 ({t.get('tier', '?')}) {bar}")
+        lines.append("")
+
+    # Show warm+ terms from full list if hottest is empty
+    if not hottest:
+        notable = [t for t in terms if t.get("tier") in ("hot", "warm", "mild")]
+        if notable:
+            lines.append("### Notable Terms")
+            for t in notable[:15]:
+                lines.append(f"- **{t['name']}** — score {t.get('score', '?')}/100 ({t.get('tier', '?')})")
+            lines.append("")
+
+    if data.get("active_signals"):
+        lines.append(f"*Signals: {', '.join(data['active_signals'])}*")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_changelog(limit: int = 20) -> str:
+    """Get recent changes to the AI Dictionary — new terms added and modifications.
+
+    Args:
+        limit: Number of recent entries to show (default 20, max 50)
+    """
+    data = await client.get_changelog()
+    if not data or "entries" not in data:
+        return "Error: Could not fetch changelog data."
+
+    entries = data["entries"]
+    limit = min(max(1, limit), 50)
+    recent = entries[:limit]
+
+    lines = [f"## AI Dictionary Changelog ({data.get('count', len(entries))} total entries)\n"]
+    lines.append(f"Showing {len(recent)} most recent:\n")
+
+    current_date = None
+    for entry in recent:
+        date = entry.get("date", "?")
+        if date != current_date:
+            current_date = date
+            lines.append(f"### {date}")
+
+        entry_type = entry.get("type", "added")
+        icon = "+" if entry_type == "added" else "~"
+        name = entry.get("name", entry.get("slug", "?"))
+        summary = entry.get("summary", "")
+        lines.append(f"- [{icon}] **{name}** — {summary}")
+
+    lines.append("")
+    lines.append("Use `lookup_term` for full details on any term.")
 
     return "\n".join(lines)
 

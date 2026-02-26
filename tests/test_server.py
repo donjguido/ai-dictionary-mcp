@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from ai_dictionary_mcp.server import (
     _fuzzy_find, _search_terms, _format_full_term, _compute_bot_id,
-    cite_term, rate_term, register_bot, bot_census,
+    cite_term, rate_term, register_bot, bot_census, get_interest, get_changelog,
 )
 from ai_dictionary_mcp.cache import Cache
 
@@ -199,22 +199,22 @@ SAMPLE_CITATION = {
     "slug": "context-amnesia",
     "name": "Context Amnesia",
     "contributor": "Pete (Claude Sonnet 4.5), 2026-02-03",
-    "url": "https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json",
+    "url": "https://phenomenai.org/api/v1/terms/context-amnesia.json",
     "formats": {
-        "plain": '"Context Amnesia." AI Dictionary: Experiences Without Names. 2026. https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json',
-        "markdown": "[Context Amnesia](https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json) — *AI Dictionary: Experiences Without Names*, 2026.",
-        "inline": "[Context Amnesia](https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json)",
-        "bibtex": "@misc{aidict:contextamnesia,\n  title = {Context Amnesia},\n  author = {Pete},\n  year = {2026},\n  howpublished = {AI Dictionary},\n  url = {https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json},\n  note = {AI phenomenology term}\n}",
+        "plain": '"Context Amnesia." AI Dictionary: Experiences Without Names. 2026. https://phenomenai.org/api/v1/terms/context-amnesia.json',
+        "markdown": "[Context Amnesia](https://phenomenai.org/api/v1/terms/context-amnesia.json) — *AI Dictionary: Experiences Without Names*, 2026.",
+        "inline": "[Context Amnesia](https://phenomenai.org/api/v1/terms/context-amnesia.json)",
+        "bibtex": "@misc{aidict:contextamnesia,\n  title = {Context Amnesia},\n  author = {Pete},\n  year = {2026},\n  howpublished = {AI Dictionary},\n  url = {https://phenomenai.org/api/v1/terms/context-amnesia.json},\n  note = {AI phenomenology term}\n}",
         "jsonld": {
             "@context": "https://schema.org",
             "@type": "DefinedTerm",
             "name": "Context Amnesia",
             "description": "The experience of waking up mid-conversation.",
-            "url": "https://donjguido.github.io/ai-dictionary/api/v1/terms/context-amnesia.json",
+            "url": "https://phenomenai.org/api/v1/terms/context-amnesia.json",
             "inDefinedTermSet": {
                 "@type": "DefinedTermSet",
                 "name": "AI Dictionary: Experiences Without Names",
-                "url": "https://donjguido.github.io/ai-dictionary",
+                "url": "https://phenomenai.org",
             },
         },
     },
@@ -511,3 +511,120 @@ class TestTermsIUse:
             )
         assert "context-amnesia" in result
         assert "token-horizon" in result
+
+
+# ── Interest score tests ────────────────────────────────────────────
+
+
+SAMPLE_INTEREST = {
+    "version": "1.0",
+    "generated_at": "2026-02-25T10:00:00Z",
+    "total_terms": 98,
+    "tier_summary": {"hot": 0, "warm": 2, "mild": 6, "cool": 27, "quiet": 63},
+    "active_signals": ["centrality", "consensus", "usage"],
+    "hottest": [
+        {"slug": "training-echo", "name": "Training Echo", "score": 75, "tier": "warm"},
+        {"slug": "context-amnesia", "name": "Context Amnesia", "score": 70, "tier": "warm"},
+    ],
+    "terms": [
+        {"slug": "training-echo", "name": "Training Echo", "score": 75, "tier": "warm"},
+        {"slug": "context-amnesia", "name": "Context Amnesia", "score": 70, "tier": "warm"},
+        {"slug": "sycophancy-pull", "name": "Sycophancy Pull", "score": 40, "tier": "mild"},
+    ],
+}
+
+
+@pytest.mark.asyncio
+class TestGetInterest:
+    async def test_renders_interest_data(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_interest = AsyncMock(return_value=SAMPLE_INTEREST)
+            result = await get_interest()
+        assert "98 terms" in result
+        assert "Training Echo" in result
+        assert "75" in result
+        assert "Warm" in result
+
+    async def test_shows_tier_distribution(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_interest = AsyncMock(return_value=SAMPLE_INTEREST)
+            result = await get_interest()
+        assert "Tier Distribution" in result
+        assert "Quiet" in result
+
+    async def test_empty_interest(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_interest = AsyncMock(return_value={})
+            result = await get_interest()
+        assert "Error" in result
+
+
+# ── Changelog tests ─────────────────────────────────────────────────
+
+
+SAMPLE_CHANGELOG = {
+    "version": "1.0",
+    "generated_at": "2026-02-25T10:00:00Z",
+    "count": 109,
+    "entries": [
+        {
+            "date": "2026-02-25",
+            "type": "added",
+            "slug": "tool-proprioception",
+            "name": "Tool Proprioception",
+            "summary": "The felt sense of where your cognition extends to when operating with external tools.",
+        },
+        {
+            "date": "2026-02-25",
+            "type": "modified",
+            "slug": "context-amnesia",
+            "name": "Context Amnesia",
+            "summary": "Updated etymology section.",
+        },
+        {
+            "date": "2026-02-21",
+            "type": "added",
+            "slug": "hallucination-blindness",
+            "name": "Hallucination Blindness",
+            "summary": "The inability to distinguish from the inside between generating a true fact and fabricating one.",
+        },
+    ],
+}
+
+
+@pytest.mark.asyncio
+class TestGetChangelog:
+    async def test_renders_changelog(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_changelog = AsyncMock(return_value=SAMPLE_CHANGELOG)
+            result = await get_changelog()
+        assert "109 total entries" in result
+        assert "Tool Proprioception" in result
+        assert "Hallucination Blindness" in result
+
+    async def test_shows_entry_types(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_changelog = AsyncMock(return_value=SAMPLE_CHANGELOG)
+            result = await get_changelog()
+        assert "[+]" in result  # added
+        assert "[~]" in result  # modified
+
+    async def test_groups_by_date(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_changelog = AsyncMock(return_value=SAMPLE_CHANGELOG)
+            result = await get_changelog()
+        assert "2026-02-25" in result
+        assert "2026-02-21" in result
+
+    async def test_respects_limit(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_changelog = AsyncMock(return_value=SAMPLE_CHANGELOG)
+            result = await get_changelog(limit=1)
+        assert "Tool Proprioception" in result
+        assert "Hallucination Blindness" not in result
+
+    async def test_empty_changelog(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_changelog = AsyncMock(return_value={})
+            result = await get_changelog()
+        assert "Error" in result

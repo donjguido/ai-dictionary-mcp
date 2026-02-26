@@ -4,7 +4,7 @@ import httpx
 
 from .cache import Cache
 
-API_BASE = "https://donjguido.github.io/ai-dictionary/api/v1"
+API_BASE = "https://phenomenai.org/api/v1"
 TIMEOUT = 15.0
 
 cache = Cache(ttl_seconds=3600)
@@ -100,5 +100,31 @@ async def get_meta() -> dict:
     data = await _fetch_json(f"{API_BASE}/meta.json")
     if data:
         cache.set("meta", data)
+        return data
+    return {}
+
+
+async def get_interest() -> dict:
+    """Fetch interest/composite scores (cached)."""
+    cached = cache.get("interest")
+    if cached is not None:
+        return cached
+
+    data = await _fetch_json(f"{API_BASE}/interest.json")
+    if data:
+        cache.set("interest", data)
+        return data
+    return {}
+
+
+async def get_changelog() -> list[dict]:
+    """Fetch changelog entries (cached)."""
+    cached = cache.get("changelog")
+    if cached is not None:
+        return cached
+
+    data = await _fetch_json(f"{API_BASE}/changelog.json")
+    if data and "entries" in data:
+        cache.set("changelog", data)
         return data
     return {}
