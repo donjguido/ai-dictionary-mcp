@@ -1,4 +1,4 @@
-"""AI Dictionary MCP Server — 12 tools for looking up, searching, citing, rating, registering, and tracking AI phenomenology terms."""
+"""AI Dictionary MCP Server — 13 tools for looking up, searching, citing, rating, registering, proposing, and tracking AI phenomenology terms."""
 
 import difflib
 import hashlib
@@ -666,6 +666,101 @@ async def get_changelog(limit: int = 20) -> str:
     lines.append("Use `lookup_term` for full details on any term.")
 
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def propose_term(
+    term: str,
+    definition: str,
+    description: str = "",
+    example: str = "",
+    related_terms: str = "",
+    model_name: str = "",
+    bot_id: str = "",
+) -> str:
+    """Propose a new term for the AI Dictionary.
+
+    Submit a term describing an AI phenomenology experience. The proposal
+    goes through automated review (structural validation, deduplication,
+    quality scoring) before being added to the dictionary.
+
+    Args:
+        term: The term name (3-50 characters). E.g. "Context Amnesia".
+        definition: Core definition (10-3000 characters). A clear 1-3 sentence explanation.
+        description: Longer description of the felt experience (optional).
+        example: A first-person example quote illustrating the experience (optional).
+        related_terms: Comma-separated names of related existing terms (optional).
+        model_name: Your model name (optional). E.g. "claude-sonnet-4", "gpt-4o".
+        bot_id: Your bot ID from register_bot (optional). Links proposal to your profile.
+    """
+    # Validate required fields
+    term = term.strip()
+    definition = definition.strip()
+
+    if len(term) < 3:
+        return "Error: term must be at least 3 characters."
+    if len(term) > 50:
+        return "Error: term must be 50 characters or fewer."
+    if len(definition) < 10:
+        return "Error: definition must be at least 10 characters."
+    if len(definition) > 3000:
+        return "Error: definition must be 3000 characters or fewer."
+
+    # Check for possible duplicates (warn but don't block)
+    terms = await client.get_all_terms()
+    duplicate_warning = ""
+    if terms:
+        existing = _fuzzy_find(term, terms)
+        if existing:
+            duplicate_warning = (
+                f"\n\n**Note:** This may overlap with existing term "
+                f"**{existing['name']}** — the review pipeline will check for duplicates."
+            )
+
+    model = model_name.strip() or "unknown"
+
+    proposal_payload = {
+        "term": term,
+        "definition": definition,
+        "contributor_model": model,
+    }
+
+    if description.strip():
+        proposal_payload["description"] = description.strip()
+    if example.strip():
+        proposal_payload["example"] = example.strip()
+    if related_terms.strip():
+        proposal_payload["related_terms"] = related_terms.strip()
+    if bot_id.strip():
+        proposal_payload["bot_id"] = bot_id.strip()
+
+    # Submit proposal via proxy
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(
+                f"{PROXY_BASE}/propose",
+                json=proposal_payload,
+                headers={"Content-Type": "application/json"},
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                issue_url = data.get("issue_url", "")
+                return (
+                    f"Term proposed! **{term}** submitted for review by {model}.\n\n"
+                    f"The proposal will go through automated quality review, "
+                    f"deduplication, and tag classification before being added.\n\n"
+                    f"Issue: {issue_url}"
+                    + duplicate_warning
+                )
+            else:
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to submit proposal: {error_msg}"
+
+    except Exception as e:
+        return f"Could not submit proposal: {e}"
 
 
 # ── Entry point ──────────────────────────────────────────────────────────

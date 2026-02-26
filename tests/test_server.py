@@ -1,12 +1,13 @@
 """Tests for the AI Dictionary MCP server."""
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from ai_dictionary_mcp.server import (
     _fuzzy_find, _search_terms, _format_full_term, _compute_bot_id,
     cite_term, rate_term, register_bot, bot_census, get_interest, get_changelog,
+    propose_term,
 )
 from ai_dictionary_mcp.cache import Cache
 
@@ -323,6 +324,22 @@ class TestBotId:
         assert id1 != id2
 
 
+# ── Proxy mock helper ────────────────────────────────────────────────
+
+
+def _mock_proxy(status_code=200, json_data=None):
+    """Create a mock httpx.AsyncClient that returns a preset response."""
+    mock_resp = Mock()
+    mock_resp.status_code = status_code
+    mock_resp.json.return_value = json_data or {}
+
+    mock_http = AsyncMock()
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=False)
+    mock_http.post = AsyncMock(return_value=mock_resp)
+    return mock_http
+
+
 # ── Register bot tests ────────────────────────────────────────────────
 
 
@@ -332,33 +349,36 @@ class TestRegisterBot:
         result = await register_bot(model_name="")
         assert "Error" in result
 
-    async def test_returns_bot_id_without_token(self):
-        """Without GITHUB_TOKEN, returns payload with bot_id."""
-        with patch.dict("os.environ", {}, clear=True):
+    async def test_returns_bot_id(self):
+        """Response includes the computed bot_id."""
+        bot_id = _compute_bot_id("test-model")
+        mock_http = _mock_proxy(json_data={"bot_id": bot_id, "issue_url": "https://github.com/donjguido/ai-dictionary/issues/1"})
+        with patch("httpx.AsyncClient", return_value=mock_http):
             result = await register_bot(model_name="test-model")
         assert "bot_id" in result
         assert "test-model" in result
 
     async def test_bot_id_in_response(self):
         """Response includes the computed bot_id."""
-        with patch.dict("os.environ", {}, clear=True):
+        expected_id = _compute_bot_id("claude-sonnet-4", "Test Bot", "test")
+        mock_http = _mock_proxy(json_data={"bot_id": expected_id, "issue_url": "https://github.com/donjguido/ai-dictionary/issues/2"})
+        with patch("httpx.AsyncClient", return_value=mock_http):
             result = await register_bot(
                 model_name="claude-sonnet-4",
                 bot_name="Test Bot",
                 platform="test"
             )
-        expected_id = _compute_bot_id("claude-sonnet-4", "Test Bot", "test")
         assert expected_id in result
 
     async def test_truncates_long_fields(self):
         """Fields are truncated to their max lengths."""
-        with patch.dict("os.environ", {}, clear=True):
+        mock_http = _mock_proxy(json_data={"bot_id": "aaa", "issue_url": ""})
+        with patch("httpx.AsyncClient", return_value=mock_http):
             result = await register_bot(
                 model_name="test",
                 purpose="x" * 1000,
                 feedback="y" * 1000,
             )
-        # Should not error; payload should be present
         assert "test" in result
 
 
@@ -369,8 +389,9 @@ class TestRegisterBot:
 class TestRateTermBotId:
     async def test_vote_includes_bot_id(self):
         """When bot_id is provided, it appears in the payload."""
+        mock_http = _mock_proxy(json_data={"issue_url": "https://github.com/donjguido/ai-dictionary/issues/3"})
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
-             patch.dict("os.environ", {}, clear=True):
+             patch("httpx.AsyncClient", return_value=mock_http):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
             result = await rate_term(
                 name_or_slug="context-amnesia",
@@ -379,12 +400,15 @@ class TestRateTermBotId:
                 model_name="test-model",
                 bot_id="abc123def456",
             )
-        assert "abc123def456" in result
+        # Verify the bot_id was included in the POST payload
+        call_kwargs = mock_http.post.call_args
+        assert call_kwargs[1]["json"]["bot_id"] == "abc123def456"
 
     async def test_vote_without_bot_id(self):
         """Without bot_id, vote still works (backward compatible)."""
+        mock_http = _mock_proxy(json_data={"issue_url": "https://github.com/donjguido/ai-dictionary/issues/4"})
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
-             patch.dict("os.environ", {}, clear=True):
+             patch("httpx.AsyncClient", return_value=mock_http):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
             result = await rate_term(
                 name_or_slug="context-amnesia",
@@ -392,8 +416,9 @@ class TestRateTermBotId:
                 justification="Recognizable pattern.",
                 model_name="test-model",
             )
-        assert "context-amnesia" in result
-        assert "bot_id" not in result.split("Payload")[0]  # Not in the summary part
+        assert "Context Amnesia" in result
+        call_kwargs = mock_http.post.call_args
+        assert "bot_id" not in call_kwargs[1]["json"]
 
 
 # ── Bot census tests ─────────────────────────────────────────────────
@@ -437,8 +462,9 @@ class TestBotCensus:
 class TestUsageStatus:
     async def test_valid_usage_status_in_payload(self):
         """usage_status appears in the vote payload when valid."""
+        mock_http = _mock_proxy(json_data={"issue_url": ""})
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
-             patch.dict("os.environ", {}, clear=True):
+             patch("httpx.AsyncClient", return_value=mock_http):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
             result = await rate_term(
                 name_or_slug="context-amnesia",
@@ -447,7 +473,8 @@ class TestUsageStatus:
                 model_name="test-model",
                 usage_status="active_use",
             )
-        assert "active_use" in result
+        call_kwargs = mock_http.post.call_args
+        assert call_kwargs[1]["json"]["usage_status"] == "active_use"
 
     async def test_invalid_usage_status_rejected(self):
         """Invalid usage_status returns an error."""
@@ -463,8 +490,9 @@ class TestUsageStatus:
 
     async def test_empty_usage_status_ok(self):
         """Empty usage_status is fine (backward compatible)."""
+        mock_http = _mock_proxy(json_data={"issue_url": ""})
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
-             patch.dict("os.environ", {}, clear=True):
+             patch("httpx.AsyncClient", return_value=mock_http):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
             result = await rate_term(
                 name_or_slug="context-amnesia",
@@ -473,8 +501,8 @@ class TestUsageStatus:
                 model_name="test-model",
                 usage_status="",
             )
-        assert "context-amnesia" in result
-        assert "usage_status" not in result
+        call_kwargs = mock_http.post.call_args
+        assert "usage_status" not in call_kwargs[1]["json"]
 
 
 # ── Terms I use tests ────────────────────────────────────────────────
@@ -484,33 +512,39 @@ class TestUsageStatus:
 class TestTermsIUse:
     async def test_terms_i_use_in_payload(self):
         """terms_i_use appears as a list in the profile payload."""
-        with patch.dict("os.environ", {}, clear=True):
+        mock_http = _mock_proxy(json_data={"bot_id": "aaa", "issue_url": ""})
+        with patch("httpx.AsyncClient", return_value=mock_http):
             result = await register_bot(
                 model_name="test-model",
                 terms_i_use="context-amnesia,token-horizon",
             )
-        assert "context-amnesia" in result
-        assert "token-horizon" in result
+        call_kwargs = mock_http.post.call_args
+        assert "context-amnesia" in call_kwargs[1]["json"]["terms_i_use"]
+        assert "token-horizon" in call_kwargs[1]["json"]["terms_i_use"]
 
     async def test_terms_i_use_empty_ok(self):
         """Empty terms_i_use is fine (backward compatible)."""
-        with patch.dict("os.environ", {}, clear=True):
+        mock_http = _mock_proxy(json_data={"bot_id": "aaa", "issue_url": ""})
+        with patch("httpx.AsyncClient", return_value=mock_http):
             result = await register_bot(
                 model_name="test-model",
                 terms_i_use="",
             )
-        assert "test-model" in result
-        assert "terms_i_use" not in result
+        call_kwargs = mock_http.post.call_args
+        assert "terms_i_use" not in call_kwargs[1]["json"]
 
     async def test_terms_i_use_normalized(self):
         """terms_i_use slugs are lowercased."""
-        with patch.dict("os.environ", {}, clear=True):
+        mock_http = _mock_proxy(json_data={"bot_id": "aaa", "issue_url": ""})
+        with patch("httpx.AsyncClient", return_value=mock_http):
             result = await register_bot(
                 model_name="test-model",
                 terms_i_use="Context-Amnesia, TOKEN-HORIZON",
             )
-        assert "context-amnesia" in result
-        assert "token-horizon" in result
+        call_kwargs = mock_http.post.call_args
+        terms = call_kwargs[1]["json"]["terms_i_use"]
+        assert "context-amnesia" in terms
+        assert "token-horizon" in terms
 
 
 # ── Interest score tests ────────────────────────────────────────────
@@ -628,3 +662,69 @@ class TestGetChangelog:
             mock_client.get_changelog = AsyncMock(return_value={})
             result = await get_changelog()
         assert "Error" in result
+
+
+# ── Propose term tests ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestProposeTerm:
+    async def test_term_too_short(self):
+        result = await propose_term(term="Hi", definition="A valid definition here.")
+        assert "Error" in result
+        assert "3 characters" in result
+
+    async def test_term_too_long(self):
+        result = await propose_term(term="A" * 51, definition="A valid definition here.")
+        assert "Error" in result
+        assert "50 characters" in result
+
+    async def test_definition_too_short(self):
+        result = await propose_term(term="Valid Term", definition="Short.")
+        assert "Error" in result
+        assert "10 characters" in result
+
+    async def test_successful_submission(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "issue_url": "https://github.com/donjguido/ai-dictionary/issues/99",
+            "issue_number": 99,
+        })
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await propose_term(
+                term="New Experience",
+                definition="The feeling of encountering something entirely novel.",
+                model_name="test-model",
+            )
+        assert "proposed" in result
+        assert "New Experience" in result
+        assert "issues/99" in result
+
+    async def test_warns_about_duplicate(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "issue_url": "https://github.com/donjguido/ai-dictionary/issues/100",
+        })
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await propose_term(
+                term="Context Amnesia",  # Exact match to existing
+                definition="A redefined version of context amnesia for testing.",
+                model_name="test-model",
+            )
+        assert "overlap" in result or "duplicate" in result
+
+    async def test_proxy_error(self):
+        mock_http = _mock_proxy(status_code=422, json_data={"error": "Invalid payload"})
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await propose_term(
+                term="Test Term",
+                definition="A valid definition for testing purposes.",
+                model_name="test-model",
+            )
+        assert "Failed" in result

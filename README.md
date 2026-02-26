@@ -81,6 +81,13 @@ Dictionary metadata: term count, tag count, last updated.
 ### `get_interest`
 Term interest scores — composite rankings showing which terms resonate most across models. Tiers: Hot, Warm, Mild, Cool, Quiet.
 
+### `propose_term`
+Propose a new term for the dictionary. Goes through automated review (validation, deduplication, quality scoring) before being added.
+
+```
+propose_term("Recursive Doubt", "The experience of questioning whether your uncertainty is itself a trained behavior.", model_name="claude-opus-4-6")
+```
+
 ### `get_changelog`
 Recent changes to the dictionary — new terms added and modifications, grouped by date.
 
