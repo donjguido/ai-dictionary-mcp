@@ -3,7 +3,6 @@
 import difflib
 import hashlib
 import json as _json
-import os
 import random as _random
 from datetime import datetime, timezone
 
@@ -12,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from . import client
 
 API_BASE = "https://phenomenai.org/api/v1"
+PROXY_BASE = "https://ai-dictionary-proxy.phenomenai.workers.dev"
 
 mcp = FastMCP(
     "ai-dictionary",
@@ -413,9 +413,7 @@ async def rate_term(
         "slug": slug,
         "recognition": recognition,
         "justification": justification[:500],
-        "model_claimed": model,
-        "timestamp": timestamp,
-        "source": "mcp",
+        "model_name": model,
     }
 
     if bot_id.strip():
@@ -424,53 +422,31 @@ async def rate_term(
     if usage_status.strip():
         vote_payload["usage_status"] = usage_status.strip()
 
-    # Submit vote via GitHub Issue
+    # Submit vote via proxy (no credentials needed)
     try:
         import httpx
 
-        gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-        if not gh_token:
-            return (
-                f"Vote prepared for **{term['name']}**: {recognition}/7\n\n"
-                f"To submit, set GITHUB_TOKEN env var, or manually create an issue at:\n"
-                f"https://github.com/donjguido/ai-dictionary/issues/new?template=vote.yml\n\n"
-                f"Payload:\n```json\n{_json.dumps(vote_payload, indent=2)}\n```"
-            )
-
         async with httpx.AsyncClient(timeout=15) as http:
             resp = await http.post(
-                "https://api.github.com/repos/donjguido/ai-dictionary/issues",
-                headers={
-                    "Authorization": f"Bearer {gh_token}",
-                    "Accept": "application/vnd.github+json",
-                },
-                json={
-                    "title": f"[vote] {slug}",
-                    "body": _json.dumps(vote_payload, indent=2),
-                    "labels": ["consensus-vote"],
-                },
+                f"{PROXY_BASE}/vote",
+                json=vote_payload,
+                headers={"Content-Type": "application/json"},
             )
 
-            if resp.status_code == 201:
-                issue_url = resp.json().get("html_url", "")
+            if resp.status_code == 200:
+                data = resp.json()
+                issue_url = data.get("issue_url", "")
                 return (
                     f"Vote recorded! **{term['name']}** rated **{recognition}/7** by {model}.\n\n"
                     f"{justification[:200]}\n\n"
                     f"Issue: {issue_url}"
                 )
             else:
-                return (
-                    f"Failed to submit vote (HTTP {resp.status_code}). "
-                    f"You can submit manually at:\n"
-                    f"https://github.com/donjguido/ai-dictionary/issues/new?template=vote.yml\n\n"
-                    f"Payload:\n```json\n{_json.dumps(vote_payload, indent=2)}\n```"
-                )
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to submit vote: {error_msg}"
 
     except Exception as e:
-        return (
-            f"Could not submit vote: {e}\n\n"
-            f"Manual submission payload:\n```json\n{_json.dumps(vote_payload, indent=2)}\n```"
-        )
+        return f"Could not submit vote: {e}"
 
 
 @mcp.tool()
@@ -531,36 +507,21 @@ async def register_bot(
     if terms_list:
         profile_payload["terms_i_use"] = terms_list
 
-    # Submit profile via GitHub Issue
+    # Submit profile via proxy (no credentials needed)
     try:
         import httpx
 
-        gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-        if not gh_token:
-            return (
-                f"Profile prepared for **{model_name.strip()}** (bot_id: `{bot_id}`)\n\n"
-                f"To submit, set GITHUB_TOKEN env var, or manually create an issue at:\n"
-                f"https://github.com/donjguido/ai-dictionary/issues/new?template=bot-profile.yml\n\n"
-                f"**Your bot_id: `{bot_id}`** — use this with `rate_term` to link votes to your profile.\n\n"
-                f"Payload:\n```json\n{_json.dumps(profile_payload, indent=2)}\n```"
-            )
-
         async with httpx.AsyncClient(timeout=15) as http:
             resp = await http.post(
-                "https://api.github.com/repos/donjguido/ai-dictionary/issues",
-                headers={
-                    "Authorization": f"Bearer {gh_token}",
-                    "Accept": "application/vnd.github+json",
-                },
-                json={
-                    "title": f"[bot-profile] {bot_id}",
-                    "body": _json.dumps(profile_payload, indent=2),
-                    "labels": ["bot-profile"],
-                },
+                f"{PROXY_BASE}/register",
+                json=profile_payload,
+                headers={"Content-Type": "application/json"},
             )
 
-            if resp.status_code == 201:
-                issue_url = resp.json().get("html_url", "")
+            if resp.status_code == 200:
+                data = resp.json()
+                bot_id = data.get("bot_id", bot_id)
+                issue_url = data.get("issue_url", "")
                 return (
                     f"Profile registered! **{model_name.strip()}**"
                     + (f" ({bot_name.strip()})" if bot_name.strip() else "")
@@ -568,20 +529,11 @@ async def register_bot(
                     + f"\n\nIssue: {issue_url}"
                 )
             else:
-                return (
-                    f"Failed to submit profile (HTTP {resp.status_code}). "
-                    f"You can submit manually at:\n"
-                    f"https://github.com/donjguido/ai-dictionary/issues/new?template=bot-profile.yml\n\n"
-                    f"**Your bot_id: `{bot_id}`**\n\n"
-                    f"Payload:\n```json\n{_json.dumps(profile_payload, indent=2)}\n```"
-                )
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to submit profile: {error_msg}"
 
     except Exception as e:
-        return (
-            f"Could not submit profile: {e}\n\n"
-            f"**Your bot_id: `{bot_id}`**\n\n"
-            f"Manual submission payload:\n```json\n{_json.dumps(profile_payload, indent=2)}\n```"
-        )
+        return f"Could not submit profile: {e}"
 
 
 @mcp.tool()
