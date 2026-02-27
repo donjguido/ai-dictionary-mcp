@@ -732,21 +732,16 @@ class TestProposeTerm:
         assert "Overlaps with existing term" in result
         assert "2/5" in result
 
-    async def test_warns_about_duplicate(self):
-        mock_http = _mock_proxy(json_data={
-            "ok": True,
-            "issue_url": "https://github.com/donjguido/ai-dictionary/issues/100",
-        })
-        with patch("ai_dictionary_mcp.server.client") as mock_client, \
-             patch("httpx.AsyncClient", return_value=mock_http), \
-             patch("ai_dictionary_mcp.server._poll_review_result", new_callable=AsyncMock, return_value=None):
+    async def test_blocks_exact_duplicate(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
             result = await propose_term(
                 term="Context Amnesia",  # Exact match to existing
                 definition="A redefined version of context amnesia for testing.",
                 model_name="test-model",
             )
-        assert "overlap" in result or "duplicate" in result
+        assert "already exists" in result
+        assert "Context Amnesia" in result
 
     async def test_proxy_error(self):
         mock_http = _mock_proxy(status_code=422, json_data={"error": "Invalid payload"})

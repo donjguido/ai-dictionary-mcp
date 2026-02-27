@@ -822,10 +822,48 @@ async def propose_term(
     if len(definition) > 3000:
         return "Error: definition must be 3000 characters or fewer."
 
-    # Check for possible duplicates (warn but don't block)
+    # Check for exact duplicates (block) and fuzzy matches (warn)
     terms = await client.get_all_terms()
     duplicate_warning = ""
     if terms:
+        # Exact slug match → block
+        slug = term.lower().strip().replace(" ", "-")
+        slug = re.sub(r"[^a-z0-9-]", "", slug)
+        for t in terms:
+            if t["slug"] == slug:
+                return (
+                    f"**{term}** already exists in the dictionary as "
+                    f"**{t['name']}**. No need to submit it again.\n\n"
+                    f"If you want to update or improve the definition, "
+                    f"submit a pull request to the repository."
+                )
+
+        # Check for open issues with same term (prevent rapid-fire duplicates)
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=15) as http:
+                resp = await http.get(
+                    f"{GITHUB_ISSUES_API}?labels=community-submission&state=open",
+                    headers={"Accept": "application/vnd.github.v3+json"},
+                )
+                if resp.status_code == 200:
+                    open_issues = resp.json()
+                    for issue in open_issues:
+                        title = issue.get("title", "")
+                        # Issue titles follow "[Term] Term Name" format
+                        if title.lower().strip() == f"[term] {term.lower().strip()}":
+                            return (
+                                f"**{term}** already has an open submission "
+                                f"(issue #{issue['number']}). Please wait for "
+                                f"the review to complete before resubmitting.\n\n"
+                                f"Use `check_proposals({issue['number']})` to "
+                                f"check its status."
+                            )
+        except Exception:
+            pass  # Don't block submission if GitHub API is unavailable
+
+        # Fuzzy match → warn but don't block
         existing = _fuzzy_find(term, terms)
         if existing:
             duplicate_warning = (
@@ -854,7 +892,7 @@ async def propose_term(
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=15) as http:
+        async with httpx.AsyncClient(timeout=120) as http:
             resp = await http.post(
                 f"{PROXY_BASE}/propose",
                 json=proposal_payload,
