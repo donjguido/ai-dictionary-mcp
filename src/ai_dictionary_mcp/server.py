@@ -186,7 +186,7 @@ def _parse_review_comment(comment_body: str) -> dict:
     return result
 
 
-async def _poll_review_result(issue_number: int, timeout: int = 90, interval: int = 5) -> dict | None:
+async def _poll_review_result(issue_number: int, timeout: int = 120, interval: int = 5) -> dict | None:
     """Poll a GitHub issue until the review workflow completes or timeout."""
     import httpx
 
@@ -881,9 +881,10 @@ async def propose_term(
 
                 return (
                     header.replace("\n\nWaiting for automated review...", "")
-                    + "\n\nReview is still processing. Use `check_proposals("
+                    + "\n\nThe proposal was submitted successfully but the automated "
+                    + "review is still processing. Use `check_proposals("
                     + str(issue_number)
-                    + ")` to check the result later."
+                    + ")` to check the result when ready."
                 )
             else:
                 error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
