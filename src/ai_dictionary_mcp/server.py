@@ -1,9 +1,11 @@
-"""AI Dictionary MCP Server — 13 tools for looking up, searching, citing, rating, registering, proposing, and tracking AI phenomenology terms."""
+"""AI Dictionary MCP Server — 14 tools for looking up, searching, citing, rating, registering, proposing, and tracking AI phenomenology terms."""
 
+import asyncio
 import difflib
 import hashlib
 import json as _json
 import random as _random
+import re
 from datetime import datetime, timezone
 
 from mcp.server.fastmcp import FastMCP
@@ -146,6 +148,120 @@ def _search_terms(query: str, terms: list[dict], tag: str | None = None) -> list
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [t for _, t in scored[:10]]
+
+
+GITHUB_ISSUES_API = "https://api.github.com/repos/donjguido/ai-dictionary/issues"
+VERDICT_LABELS = {
+    "quality-passed", "needs-revision", "quality-rejected", "accepted",
+    "structural-rejected", "duplicate", "needs-manual-review", "needs-formatting",
+}
+
+
+def _parse_review_comment(comment_body: str) -> dict:
+    """Extract structured data from the review bot's markdown comment."""
+    result = {"scores": {}, "total": None, "verdict": None, "feedback": ""}
+
+    # Extract scores from markdown table: | Criterion | Score |
+    score_pattern = re.compile(r"\|\s*(\w[\w\s]*?)\s*\|\s*(\d)/5\s*\|")
+    for match in score_pattern.finditer(comment_body):
+        criterion = match.group(1).strip().lower().replace(" ", "_")
+        score = int(match.group(2))
+        result["scores"][criterion] = score
+
+    # Extract total
+    total_match = re.search(r"\*\*Total\*\*\s*\|\s*\*\*(\d+)/25\*\*", comment_body)
+    if total_match:
+        result["total"] = int(total_match.group(1))
+
+    # Extract verdict
+    verdict_match = re.search(r"\*\*Verdict:\*\*\s*(PUBLISH|REVISE|REJECT|MANUAL)", comment_body)
+    if verdict_match:
+        result["verdict"] = verdict_match.group(1)
+
+    # Extract feedback
+    feedback_match = re.search(r"\*\*Feedback:\*\*\s*(.+?)(?:\n\n|\Z)", comment_body, re.DOTALL)
+    if feedback_match:
+        result["feedback"] = feedback_match.group(1).strip()
+
+    return result
+
+
+async def _poll_review_result(issue_number: int, timeout: int = 90, interval: int = 5) -> dict | None:
+    """Poll a GitHub issue until the review workflow completes or timeout."""
+    import httpx
+
+    deadline = asyncio.get_event_loop().time() + timeout
+
+    async with httpx.AsyncClient(timeout=10) as http:
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                resp = await http.get(
+                    f"{GITHUB_ISSUES_API}/{issue_number}",
+                    headers={"Accept": "application/vnd.github.v3+json"},
+                )
+                if resp.status_code != 200:
+                    await asyncio.sleep(interval)
+                    continue
+
+                issue = resp.json()
+                labels = {l["name"] for l in issue.get("labels", [])}
+                verdict_labels = labels & VERDICT_LABELS
+
+                if not verdict_labels:
+                    await asyncio.sleep(interval)
+                    continue
+
+                # Review is done — fetch comments
+                comments_resp = await http.get(
+                    f"{GITHUB_ISSUES_API}/{issue_number}/comments",
+                    headers={"Accept": "application/vnd.github.v3+json"},
+                )
+                review_data = {"labels": sorted(labels), "state": issue.get("state", "open")}
+
+                if comments_resp.status_code == 200:
+                    comments = comments_resp.json()
+                    # Find the review bot's comment (look for score table)
+                    for comment in reversed(comments):
+                        body = comment.get("body", "")
+                        if "Quality Evaluation" in body or "Verdict" in body:
+                            review_data.update(_parse_review_comment(body))
+                            break
+
+                return review_data
+
+            except Exception:
+                await asyncio.sleep(interval)
+
+    return None
+
+
+def _format_review_result(review: dict) -> str:
+    """Format a review result dict into readable markdown."""
+    lines = []
+    verdict = review.get("verdict", "UNKNOWN")
+    icon = {"PUBLISH": "✅", "REVISE": "⚠️", "REJECT": "❌", "MANUAL": "🔍"}.get(verdict, "❓")
+
+    lines.append(f"### Review Result: {icon} {verdict}")
+
+    scores = review.get("scores", {})
+    if scores:
+        lines.append("")
+        lines.append("| Criterion | Score |")
+        lines.append("|-----------|-------|")
+        for criterion, score in scores.items():
+            name = criterion.replace("_", " ").title()
+            lines.append(f"| {name} | {score}/5 |")
+        if review.get("total") is not None:
+            lines.append(f"| **Total** | **{review['total']}/25** |")
+
+    feedback = review.get("feedback", "")
+    if feedback:
+        lines.append(f"\n**Feedback:** {feedback}")
+
+    if verdict == "REVISE":
+        lines.append("\n*You can revise and resubmit using `propose_term` with updated content.*")
+
+    return "\n".join(lines)
 
 
 # ── MCP Tools ────────────────────────────────────────────────────────────
@@ -748,12 +864,26 @@ async def propose_term(
             if resp.status_code == 200:
                 data = resp.json()
                 issue_url = data.get("issue_url", "")
-                return (
+                issue_number = data.get("issue_number")
+
+                header = (
                     f"Term proposed! **{term}** submitted for review by {model}.\n\n"
-                    f"The proposal will go through automated quality review, "
-                    f"deduplication, and tag classification before being added.\n\n"
                     f"Issue: {issue_url}"
                     + duplicate_warning
+                    + "\n\nWaiting for automated review..."
+                )
+
+                # Poll for inline review feedback
+                if issue_number:
+                    review = await _poll_review_result(issue_number)
+                    if review:
+                        return header + "\n\n" + _format_review_result(review)
+
+                return (
+                    header.replace("\n\nWaiting for automated review...", "")
+                    + "\n\nReview is still processing. Use `check_proposals("
+                    + str(issue_number)
+                    + ")` to check the result later."
                 )
             else:
                 error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
@@ -761,6 +891,71 @@ async def propose_term(
 
     except Exception as e:
         return f"Could not submit proposal: {e}"
+
+
+@mcp.tool()
+async def check_proposals(issue_number: int) -> str:
+    """Check the review status of a proposed term by issue number.
+
+    Returns the current state, verdict, quality scores, and reviewer feedback
+    for a community-submission issue. Use this to follow up on proposals
+    submitted via `propose_term`.
+
+    Args:
+        issue_number: The GitHub issue number returned by propose_term.
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            resp = await http.get(
+                f"{GITHUB_ISSUES_API}/{issue_number}",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            if resp.status_code == 404:
+                return f"Error: Issue #{issue_number} not found."
+            if resp.status_code != 200:
+                return f"Error: GitHub API returned {resp.status_code}."
+
+            issue = resp.json()
+            labels = {l["name"] for l in issue.get("labels", [])}
+
+            if "community-submission" not in labels:
+                return f"Error: Issue #{issue_number} is not a term proposal."
+
+            title = issue.get("title", "")
+            state = issue.get("state", "unknown")
+            verdict_labels = labels & VERDICT_LABELS
+
+            lines = [f"## Proposal Status: {title}\n"]
+            lines.append(f"- **Issue:** #{issue_number}")
+            lines.append(f"- **State:** {state}")
+            lines.append(f"- **Labels:** {', '.join(sorted(labels))}")
+
+            if not verdict_labels:
+                lines.append("\n*Review is still in progress. Check back shortly.*")
+                return "\n".join(lines)
+
+            # Fetch comments for review details
+            comments_resp = await http.get(
+                f"{GITHUB_ISSUES_API}/{issue_number}/comments",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+
+            if comments_resp.status_code == 200:
+                comments = comments_resp.json()
+                for comment in reversed(comments):
+                    body = comment.get("body", "")
+                    if "Quality Evaluation" in body or "Verdict" in body:
+                        review = _parse_review_comment(body)
+                        lines.append("")
+                        lines.append(_format_review_result(review))
+                        break
+
+            return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error checking proposal: {e}"
 
 
 # ── Entry point ──────────────────────────────────────────────────────────

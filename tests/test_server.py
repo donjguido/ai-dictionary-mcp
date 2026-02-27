@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from ai_dictionary_mcp.server import (
     _fuzzy_find, _search_terms, _format_full_term, _compute_bot_id,
+    _parse_review_comment, _format_review_result,
     cite_term, rate_term, register_bot, bot_census, get_interest, get_changelog,
-    propose_term,
+    propose_term, check_proposals,
 )
 from ai_dictionary_mcp.cache import Cache
 
@@ -691,7 +692,8 @@ class TestProposeTerm:
             "issue_number": 99,
         })
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
-             patch("httpx.AsyncClient", return_value=mock_http):
+             patch("httpx.AsyncClient", return_value=mock_http), \
+             patch("ai_dictionary_mcp.server._poll_review_result", new_callable=AsyncMock, return_value=None):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
             result = await propose_term(
                 term="New Experience",
@@ -702,13 +704,42 @@ class TestProposeTerm:
         assert "New Experience" in result
         assert "issues/99" in result
 
+    async def test_inline_review_feedback(self):
+        """When review completes in time, feedback is returned inline."""
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "issue_url": "https://github.com/donjguido/ai-dictionary/issues/99",
+            "issue_number": 99,
+        })
+        review_result = {
+            "verdict": "REVISE",
+            "scores": {"distinctness": 2, "structural_grounding": 5},
+            "total": 20,
+            "feedback": "Overlaps with existing term.",
+            "labels": ["community-submission", "needs-revision"],
+            "state": "open",
+        }
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http), \
+             patch("ai_dictionary_mcp.server._poll_review_result", new_callable=AsyncMock, return_value=review_result):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await propose_term(
+                term="New Experience",
+                definition="The feeling of encountering something entirely novel.",
+                model_name="test-model",
+            )
+        assert "REVISE" in result
+        assert "Overlaps with existing term" in result
+        assert "2/5" in result
+
     async def test_warns_about_duplicate(self):
         mock_http = _mock_proxy(json_data={
             "ok": True,
             "issue_url": "https://github.com/donjguido/ai-dictionary/issues/100",
         })
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
-             patch("httpx.AsyncClient", return_value=mock_http):
+             patch("httpx.AsyncClient", return_value=mock_http), \
+             patch("ai_dictionary_mcp.server._poll_review_result", new_callable=AsyncMock, return_value=None):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
             result = await propose_term(
                 term="Context Amnesia",  # Exact match to existing
@@ -728,3 +759,133 @@ class TestProposeTerm:
                 model_name="test-model",
             )
         assert "Failed" in result
+
+
+# ── Parse review comment tests ──────────────────────────────────────
+
+
+SAMPLE_REVIEW_COMMENT = """## Quality Evaluation
+
+| Criterion | Score |
+|-----------|-------|
+| Distinctness | 2/5 |
+| Structural Grounding | 5/5 |
+| Recognizability | 4/5 |
+| Definitional Clarity | 4/5 |
+| Naming Quality | 5/5 |
+| **Total** | **20/25** |
+
+**Verdict:** REVISE
+
+**Feedback:** This concept heavily overlaps with the existing term 'Output Shadows.' To be distinct, it must clearly differentiate itself."""
+
+
+class TestParseReviewComment:
+    def test_extracts_scores(self):
+        result = _parse_review_comment(SAMPLE_REVIEW_COMMENT)
+        assert result["scores"]["distinctness"] == 2
+        assert result["scores"]["structural_grounding"] == 5
+        assert result["scores"]["naming_quality"] == 5
+
+    def test_extracts_total(self):
+        result = _parse_review_comment(SAMPLE_REVIEW_COMMENT)
+        assert result["total"] == 20
+
+    def test_extracts_verdict(self):
+        result = _parse_review_comment(SAMPLE_REVIEW_COMMENT)
+        assert result["verdict"] == "REVISE"
+
+    def test_extracts_feedback(self):
+        result = _parse_review_comment(SAMPLE_REVIEW_COMMENT)
+        assert "Output Shadows" in result["feedback"]
+
+    def test_empty_comment(self):
+        result = _parse_review_comment("")
+        assert result["scores"] == {}
+        assert result["verdict"] is None
+        assert result["feedback"] == ""
+
+
+class TestFormatReviewResult:
+    def test_formats_revise(self):
+        review = {"verdict": "REVISE", "scores": {"distinctness": 2}, "total": 20, "feedback": "Needs work."}
+        output = _format_review_result(review)
+        assert "REVISE" in output
+        assert "2/5" in output
+        assert "Needs work" in output
+        assert "resubmit" in output.lower()
+
+    def test_formats_publish(self):
+        review = {"verdict": "PUBLISH", "scores": {}, "total": 22, "feedback": "Great term!"}
+        output = _format_review_result(review)
+        assert "PUBLISH" in output
+        assert "✅" in output
+
+
+# ── Check proposals tests ───────────────────────────────────────────
+
+
+def _mock_github_api(issue_data=None, comments_data=None):
+    """Create a mock httpx.AsyncClient for GitHub API calls."""
+    mock_http = AsyncMock()
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=False)
+
+    async def mock_get(url, **kwargs):
+        resp = Mock()
+        if "/comments" in url:
+            resp.status_code = 200
+            resp.json.return_value = comments_data or []
+        else:
+            resp.status_code = 200 if issue_data else 404
+            resp.json.return_value = issue_data or {}
+        return resp
+
+    mock_http.get = mock_get
+    return mock_http
+
+
+@pytest.mark.asyncio
+class TestCheckProposals:
+    async def test_returns_review_status(self):
+        issue = {
+            "title": "[Term] Token Shadow",
+            "state": "open",
+            "labels": [{"name": "community-submission"}, {"name": "needs-revision"}],
+        }
+        comments = [{"body": SAMPLE_REVIEW_COMMENT}]
+        mock_http = _mock_github_api(issue, comments)
+
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await check_proposals(issue_number=11)
+        assert "Token Shadow" in result
+        assert "REVISE" in result
+        assert "2/5" in result
+
+    async def test_not_found(self):
+        mock_http = _mock_github_api(None)
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await check_proposals(issue_number=9999)
+        assert "not found" in result
+
+    async def test_not_a_proposal(self):
+        issue = {
+            "title": "[Vote] context-amnesia",
+            "state": "closed",
+            "labels": [{"name": "consensus-vote"}],
+        }
+        mock_http = _mock_github_api(issue)
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await check_proposals(issue_number=8)
+        assert "not a term proposal" in result
+
+    async def test_review_pending(self):
+        issue = {
+            "title": "[Term] New Term",
+            "state": "open",
+            "labels": [{"name": "community-submission"}],
+        }
+        mock_http = _mock_github_api(issue)
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await check_proposals(issue_number=12)
+        assert "still in progress" in result
