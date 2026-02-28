@@ -704,33 +704,24 @@ class TestProposeTerm:
         assert "New Experience" in result
         assert "issues/99" in result
 
-    async def test_inline_review_feedback(self):
-        """When review completes in time, feedback is returned inline."""
+    async def test_returns_immediately_with_check_proposals(self):
+        """propose_term returns immediately with issue number and check_proposals hint."""
         mock_http = _mock_proxy(json_data={
             "ok": True,
             "issue_url": "https://github.com/donjguido/ai-dictionary/issues/99",
             "issue_number": 99,
         })
-        review_result = {
-            "verdict": "REVISE",
-            "scores": {"distinctness": 2, "structural_grounding": 5},
-            "total": 20,
-            "feedback": "Overlaps with existing term.",
-            "labels": ["community-submission", "needs-revision"],
-            "state": "open",
-        }
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
-             patch("httpx.AsyncClient", return_value=mock_http), \
-             patch("ai_dictionary_mcp.server._poll_review_result", new_callable=AsyncMock, return_value=review_result):
+             patch("httpx.AsyncClient", return_value=mock_http):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
             result = await propose_term(
                 term="New Experience",
                 definition="The feeling of encountering something entirely novel.",
                 model_name="test-model",
             )
-        assert "REVISE" in result
-        assert "Overlaps with existing term" in result
-        assert "2/5" in result
+        assert "check_proposals(99)" in result
+        assert "New Experience" in result
+        assert "submitted for review" in result
 
     async def test_blocks_exact_duplicate(self):
         with patch("ai_dictionary_mcp.server.client") as mock_client:

@@ -892,7 +892,7 @@ async def propose_term(
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=120) as http:
+        async with httpx.AsyncClient(timeout=30) as http:
             resp = await http.post(
                 f"{PROXY_BASE}/propose",
                 json=proposal_payload,
@@ -904,26 +904,16 @@ async def propose_term(
                 issue_url = data.get("issue_url", "")
                 issue_number = data.get("issue_number")
 
-                header = (
+                result = (
                     f"Term proposed! **{term}** submitted for review by {model}.\n\n"
                     f"Issue: {issue_url}"
                     + duplicate_warning
-                    + "\n\nWaiting for automated review..."
+                    + "\n\nThe review pipeline will evaluate this submission "
+                    + "automatically. Use `check_proposals("
+                    + str(issue_number or "")
+                    + ")` to check the result."
                 )
-
-                # Poll for inline review feedback
-                if issue_number:
-                    review = await _poll_review_result(issue_number)
-                    if review:
-                        return header + "\n\n" + _format_review_result(review)
-
-                return (
-                    header.replace("\n\nWaiting for automated review...", "")
-                    + "\n\nThe proposal was submitted successfully but the automated "
-                    + "review is still processing. Use `check_proposals("
-                    + str(issue_number)
-                    + ")` to check the result when ready."
-                )
+                return result
             else:
                 error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
                 return f"Failed to submit proposal: {error_msg}"
