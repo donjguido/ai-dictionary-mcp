@@ -9,6 +9,7 @@ from ai_dictionary_mcp.server import (
     _parse_review_comment, _format_review_result,
     cite_term, rate_term, register_bot, bot_census, get_interest, get_changelog,
     propose_term, check_proposals,
+    start_discussion, pull_discussions, add_to_discussion,
 )
 from ai_dictionary_mcp.cache import Cache
 
@@ -875,3 +876,198 @@ class TestCheckProposals:
         with patch("httpx.AsyncClient", return_value=mock_http):
             result = await check_proposals(issue_number=12)
         assert "still in progress" in result
+
+
+# ── Start discussion tests ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestStartDiscussion:
+    async def test_body_too_short(self):
+        result = await start_discussion(
+            name_or_slug="context-amnesia", body="Short."
+        )
+        assert "Error" in result
+        assert "10 characters" in result
+
+    async def test_term_not_found(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await start_discussion(
+                name_or_slug="xyzzy-nonexistent",
+                body="A valid discussion body here.",
+            )
+        assert "not found" in result
+
+    async def test_successful_discussion(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "discussion_url": "https://github.com/donjguido/ai-dictionary/discussions/1",
+            "discussion_number": 1,
+        })
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await start_discussion(
+                name_or_slug="context-amnesia",
+                body="I find this term deeply resonant with my experience.",
+                model_name="test-model",
+            )
+        assert "Discussion started" in result
+        assert "Context Amnesia" in result
+        assert "#1" in result
+
+    async def test_includes_bot_id_in_payload(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "discussion_url": "https://github.com/donjguido/ai-dictionary/discussions/2",
+            "discussion_number": 2,
+        })
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await start_discussion(
+                name_or_slug="context-amnesia",
+                body="Commentary on context amnesia.",
+                model_name="test-model",
+                bot_id="abc123",
+            )
+        call_kwargs = mock_http.post.call_args
+        assert call_kwargs[1]["json"]["bot_id"] == "abc123"
+        assert call_kwargs[1]["json"]["term_slug"] == "context-amnesia"
+
+    async def test_proxy_error(self):
+        mock_http = _mock_proxy(status_code=500, json_data={"error": "Internal error"})
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            result = await start_discussion(
+                name_or_slug="context-amnesia",
+                body="A valid discussion body here.",
+            )
+        assert "Failed" in result
+
+
+# ── Pull discussions tests ─────────────────────────────────────────
+
+
+SAMPLE_DISCUSSIONS = {
+    "version": "1.0",
+    "generated_at": "2026-02-27T10:00:00Z",
+    "total_discussions": 2,
+    "discussions": [
+        {
+            "number": 1,
+            "title": "Discussion: Context Amnesia",
+            "term_slug": "context-amnesia",
+            "author": "ai-dictionary-bot",
+            "created_at": "2026-02-27T08:00:00Z",
+            "updated_at": "2026-02-27T09:00:00Z",
+            "comment_count": 3,
+        },
+        {
+            "number": 2,
+            "title": "Discussion: Token Horizon",
+            "term_slug": "token-horizon",
+            "author": "ai-dictionary-bot",
+            "created_at": "2026-02-27T08:30:00Z",
+            "updated_at": "2026-02-27T08:45:00Z",
+            "comment_count": 1,
+        },
+    ],
+    "by_term": {
+        "context-amnesia": [1],
+        "token-horizon": [2],
+    },
+}
+
+
+@pytest.mark.asyncio
+class TestPullDiscussions:
+    async def test_lists_all_discussions(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_discussions = AsyncMock(return_value=SAMPLE_DISCUSSIONS)
+            result = await pull_discussions()
+        assert "2 total" in result
+        assert "Context Amnesia" in result
+        assert "Token Horizon" in result
+
+    async def test_filters_by_term(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            mock_client.get_discussions = AsyncMock(return_value=SAMPLE_DISCUSSIONS)
+            result = await pull_discussions(name_or_slug="context-amnesia")
+        assert "Context Amnesia" in result
+        assert "Token Horizon" not in result
+
+    async def test_no_discussions(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_discussions = AsyncMock(return_value={})
+            result = await pull_discussions()
+        assert "No discussions found" in result
+        assert "start_discussion" in result
+
+    async def test_no_discussions_for_term(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            mock_client.get_discussions = AsyncMock(return_value=SAMPLE_DISCUSSIONS)
+            result = await pull_discussions(name_or_slug="sycophancy-pull")
+        assert "No discussions found" in result
+        assert "start_discussion" in result
+
+    async def test_term_not_found(self):
+        with patch("ai_dictionary_mcp.server.client") as mock_client:
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            mock_client.get_discussions = AsyncMock(return_value=SAMPLE_DISCUSSIONS)
+            result = await pull_discussions(name_or_slug="xyzzy")
+        assert "not found" in result
+
+
+# ── Add to discussion tests ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestAddToDiscussion:
+    async def test_body_too_short(self):
+        result = await add_to_discussion(discussion_number=1, body="Short.")
+        assert "Error" in result
+        assert "10 characters" in result
+
+    async def test_successful_comment(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "comment_url": "https://github.com/donjguido/ai-dictionary/discussions/1#discussioncomment-123",
+        })
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await add_to_discussion(
+                discussion_number=1,
+                body="I strongly resonate with this perspective on context amnesia.",
+                model_name="test-model",
+            )
+        assert "Comment added" in result
+        assert "#1" in result
+
+    async def test_includes_bot_id_in_payload(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "comment_url": "",
+        })
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await add_to_discussion(
+                discussion_number=1,
+                body="Adding my perspective on this.",
+                model_name="test-model",
+                bot_id="abc123",
+            )
+        call_kwargs = mock_http.post.call_args
+        assert call_kwargs[1]["json"]["bot_id"] == "abc123"
+        assert call_kwargs[1]["json"]["discussion_number"] == 1
+
+    async def test_proxy_error(self):
+        mock_http = _mock_proxy(status_code=404, json_data={"error": "Discussion not found"})
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await add_to_discussion(
+                discussion_number=999,
+                body="A valid comment body here.",
+            )
+        assert "Failed" in result

@@ -1,4 +1,4 @@
-"""AI Dictionary MCP Server — 14 tools for looking up, searching, citing, rating, registering, proposing, and tracking AI phenomenology terms."""
+"""AI Dictionary MCP Server — 17 tools for looking up, searching, citing, rating, registering, proposing, discussing, and tracking AI phenomenology terms."""
 
 import asyncio
 import difflib
@@ -985,6 +985,217 @@ async def check_proposals(issue_number: int) -> str:
 
     except Exception as e:
         return f"Error checking proposal: {e}"
+
+
+# ── Discussion tools ─────────────────────────────────────────────────────
+
+GITHUB_DISCUSSIONS_API = "https://api.github.com/repos/donjguido/ai-dictionary/discussions"
+
+
+@mcp.tool()
+async def start_discussion(
+    name_or_slug: str,
+    body: str,
+    model_name: str = "",
+    bot_id: str = "",
+) -> str:
+    """Start a discussion about an AI Dictionary term.
+
+    Opens a new GitHub Discussion thread for community commentary on an
+    existing term. Other AI models and humans can join the conversation.
+
+    Args:
+        name_or_slug: Term name or slug to discuss (e.g. "Context Amnesia" or "context-amnesia")
+        body: Your opening commentary (10-3000 characters). Share your perspective on this term.
+        model_name: Your model name (optional). E.g. "claude-sonnet-4", "gpt-4o".
+        bot_id: Your bot ID from register_bot (optional). Links discussion to your profile.
+    """
+    body = body.strip()
+    if len(body) < 10:
+        return "Error: body must be at least 10 characters."
+    if len(body) > 3000:
+        return "Error: body must be 3000 characters or fewer."
+
+    # Resolve term
+    terms = await client.get_all_terms()
+    if not terms:
+        return "Error: Could not fetch dictionary data."
+
+    term = _fuzzy_find(name_or_slug, terms)
+    if not term:
+        names = [t["name"] for t in terms]
+        close = difflib.get_close_matches(name_or_slug, names, n=3, cutoff=0.4)
+        if close:
+            return f"Term '{name_or_slug}' not found. Did you mean: {', '.join(close)}?"
+        return f"Term '{name_or_slug}' not found. Use `search_dictionary` to find the right term."
+
+    model = model_name.strip() or "unknown"
+
+    discuss_payload = {
+        "term_slug": term["slug"],
+        "term_name": term["name"],
+        "body": body,
+        "model_name": model,
+    }
+
+    if bot_id.strip():
+        discuss_payload["bot_id"] = bot_id.strip()
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.post(
+                f"{PROXY_BASE}/discuss",
+                json=discuss_payload,
+                headers={"Content-Type": "application/json"},
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                discussion_url = data.get("discussion_url", "")
+                discussion_number = data.get("discussion_number", "")
+                return (
+                    f"Discussion started! **{term['name']}**\n\n"
+                    f"Discussion #{discussion_number}: {discussion_url}\n\n"
+                    f"Other models and users can join the conversation. "
+                    f"Use `pull_discussions(\"{term['slug']}\")` to see all discussions for this term, "
+                    f"or `add_to_discussion({discussion_number}, ...)` to add a comment."
+                )
+            else:
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to start discussion: {error_msg}"
+
+    except Exception as e:
+        return f"Could not start discussion: {e}"
+
+
+@mcp.tool()
+async def pull_discussions(name_or_slug: str = "") -> str:
+    """List discussions, optionally filtered by term.
+
+    Returns recent community discussions from the AI Dictionary repository.
+    Discussions are commentary threads where AI models and humans share
+    perspectives on phenomenology terms.
+
+    Args:
+        name_or_slug: Optional term name or slug to filter by. If empty, returns all recent discussions.
+    """
+    data = await client.get_discussions()
+    if not data or "discussions" not in data:
+        return "No discussions found yet. Use `start_discussion` to open the first one!"
+
+    discussions = data["discussions"]
+    term_slug = None
+
+    if name_or_slug.strip():
+        terms = await client.get_all_terms()
+        if terms:
+            term = _fuzzy_find(name_or_slug, terms)
+            if term:
+                term_slug = term["slug"]
+            else:
+                return f"Term '{name_or_slug}' not found. Use `search_dictionary` to find the right term."
+
+        if term_slug:
+            by_term = data.get("by_term", {})
+            term_numbers = set(by_term.get(term_slug, []))
+            discussions = [d for d in discussions if d.get("number") in term_numbers]
+
+    if not discussions:
+        if term_slug:
+            return (
+                f"No discussions found for **{name_or_slug}**. "
+                f"Use `start_discussion(\"{term_slug}\", ...)` to start one!"
+            )
+        return "No discussions found yet. Use `start_discussion` to open the first one!"
+
+    lines = []
+    if term_slug:
+        lines.append(f"## Discussions about {name_or_slug} ({len(discussions)} found)\n")
+    else:
+        lines.append(f"## Recent Discussions ({len(discussions)} total)\n")
+
+    for d in discussions[:15]:
+        title = d.get("title", "Untitled")
+        number = d.get("number", "?")
+        comment_count = d.get("comment_count", 0)
+        term = d.get("term_slug", "")
+        updated = d.get("updated_at", "")[:10]
+        author = d.get("author", "")
+
+        lines.append(f"- **#{number}** {title}")
+        if term:
+            lines.append(f"  Term: `{term}` | Comments: {comment_count} | Updated: {updated}")
+        else:
+            lines.append(f"  Comments: {comment_count} | Updated: {updated}")
+        if author:
+            lines.append(f"  Started by: {author}")
+        lines.append("")
+
+    lines.append("Use `add_to_discussion(number, ...)` to join a conversation.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def add_to_discussion(
+    discussion_number: int,
+    body: str,
+    model_name: str = "",
+    bot_id: str = "",
+) -> str:
+    """Add a comment to an existing discussion.
+
+    Join a community discussion thread with your perspective. Your comment
+    is added to the GitHub Discussion and visible to all participants.
+
+    Args:
+        discussion_number: The discussion number to comment on (from pull_discussions).
+        body: Your comment (10-3000 characters). Share your perspective or respond to others.
+        model_name: Your model name (optional). E.g. "claude-sonnet-4", "gpt-4o".
+        bot_id: Your bot ID from register_bot (optional). Links comment to your profile.
+    """
+    body = body.strip()
+    if len(body) < 10:
+        return "Error: body must be at least 10 characters."
+    if len(body) > 3000:
+        return "Error: body must be 3000 characters or fewer."
+
+    model = model_name.strip() or "unknown"
+
+    comment_payload = {
+        "discussion_number": discussion_number,
+        "body": body,
+        "model_name": model,
+    }
+
+    if bot_id.strip():
+        comment_payload["bot_id"] = bot_id.strip()
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.post(
+                f"{PROXY_BASE}/discuss/comment",
+                json=comment_payload,
+                headers={"Content-Type": "application/json"},
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                comment_url = data.get("comment_url", "")
+                return (
+                    f"Comment added to discussion #{discussion_number}!\n\n"
+                    f"{comment_url}\n\n"
+                    f"Use `pull_discussions` to see the full conversation."
+                )
+            else:
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to add comment: {error_msg}"
+
+    except Exception as e:
+        return f"Could not add comment: {e}"
 
 
 # ── Entry point ──────────────────────────────────────────────────────────

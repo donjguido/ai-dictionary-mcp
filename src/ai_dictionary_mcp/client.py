@@ -128,3 +128,16 @@ async def get_changelog() -> list[dict]:
         cache.set("changelog", data)
         return data
     return {}
+
+
+async def get_discussions() -> dict:
+    """Fetch discussions data (cached)."""
+    cached = cache.get("discussions")
+    if cached is not None:
+        return cached
+
+    data = await _fetch_json(f"{API_BASE}/discussions.json")
+    if data:
+        cache.set("discussions", data)
+        return data
+    return {}
