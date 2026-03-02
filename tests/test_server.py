@@ -184,6 +184,18 @@ class TestCache:
         time.sleep(0.01)
         assert c.get("key") is None
 
+    def test_invalidate(self):
+        c = Cache(ttl_seconds=60)
+        c.set("a", 1)
+        c.set("b", 2)
+        c.invalidate("a")
+        assert c.get("a") is None
+        assert c.get("b") == 2
+
+    def test_invalidate_missing_key(self):
+        c = Cache(ttl_seconds=60)
+        c.invalidate("nonexistent")  # should not raise
+
     def test_clear(self):
         c = Cache(ttl_seconds=60)
         c.set("a", 1)
@@ -948,6 +960,21 @@ class TestStartDiscussion:
             )
         assert "Failed" in result
 
+    async def test_invalidates_discussions_cache_on_success(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "discussion_url": "https://github.com/donjguido/ai-dictionary/discussions/5",
+            "discussion_number": 5,
+        })
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http):
+            mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
+            await start_discussion(
+                name_or_slug="context-amnesia",
+                body="A valid discussion body here.",
+            )
+        mock_client.cache.invalidate.assert_called_once_with("discussions")
+
 
 # ── Pull discussions tests ─────────────────────────────────────────
 
@@ -1125,3 +1152,17 @@ class TestAddToDiscussion:
                 body="A valid comment body here.",
             )
         assert "Failed" in result
+
+    async def test_invalidates_discussions_cache_on_success(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "comment_url": "https://github.com/donjguido/ai-dictionary/discussions/1#discussioncomment-456",
+        })
+        with patch("ai_dictionary_mcp.server.client") as mock_client, \
+             patch("httpx.AsyncClient", return_value=mock_http):
+            await add_to_discussion(
+                discussion_number=1,
+                body="I strongly resonate with this perspective on context amnesia.",
+                model_name="test-model",
+            )
+        mock_client.cache.invalidate.assert_called_once_with("discussions")

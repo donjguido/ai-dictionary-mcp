@@ -25,6 +25,10 @@ class Cache:
         """Store a value with the current timestamp."""
         self._store[key] = (value, time.time())
 
+    def invalidate(self, key: str) -> None:
+        """Remove a single cached key so the next fetch is fresh."""
+        self._store.pop(key, None)
+
     def clear(self) -> None:
         """Clear all cached data."""
         self._store.clear()

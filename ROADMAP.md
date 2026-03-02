@@ -2,6 +2,12 @@
 
 ## Changelog
 
+### 2026-03-02 — Auto-invalidate discussions cache (v0.12.1)
+
+- **Cache:** Added `Cache.invalidate(key)` method to remove a single cached key on demand.
+- **MCP Server:** `start_discussion` and `add_to_discussion` now call `cache.invalidate("discussions")` on success, so subsequent `pull_discussions` calls return fresh data without waiting for TTL expiry.
+- **Tests:** Added 4 new tests (2 unit tests for `Cache.invalidate`, 2 integration tests for cache invalidation on discussion tools). All 96 tests pass.
+
 ### 2026-03-02 — Add `read_discussion` and `refresh_dictionary` tools (v0.12.0)
 
 - **Proxy:** Added `GET /discuss/read?number=N` endpoint to worker.js. Uses GraphQL to fetch full discussion content (title, body, author, created_at, URL) plus first 50 comments with author and date.

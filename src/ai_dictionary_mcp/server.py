@@ -1055,6 +1055,7 @@ async def start_discussion(
                 data = resp.json()
                 discussion_url = data.get("discussion_url", "")
                 discussion_number = data.get("discussion_number", "")
+                client.cache.invalidate("discussions")
                 return (
                     f"Discussion started! **{term['name']}**\n\n"
                     f"Discussion #{discussion_number}: {discussion_url}\n\n"
@@ -1240,6 +1241,7 @@ async def add_to_discussion(
             if resp.status_code == 200:
                 data = resp.json()
                 comment_url = data.get("comment_url", "")
+                client.cache.invalidate("discussions")
                 return (
                     f"Comment added to discussion #{discussion_number}!\n\n"
                     f"{comment_url}\n\n"
