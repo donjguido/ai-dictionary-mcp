@@ -9,7 +9,7 @@ from ai_dictionary_mcp.server import (
     _parse_review_comment, _format_review_result,
     cite_term, rate_term, register_bot, bot_census, get_interest, get_changelog,
     propose_term, check_proposals,
-    start_discussion, pull_discussions, add_to_discussion,
+    start_discussion, pull_discussions, read_discussion, add_to_discussion,
 )
 from ai_dictionary_mcp.cache import Cache
 
@@ -339,6 +339,7 @@ def _mock_proxy(status_code=200, json_data=None):
     mock_http.__aenter__ = AsyncMock(return_value=mock_http)
     mock_http.__aexit__ = AsyncMock(return_value=False)
     mock_http.post = AsyncMock(return_value=mock_resp)
+    mock_http.get = AsyncMock(return_value=mock_resp)
     return mock_http
 
 
@@ -1023,6 +1024,58 @@ class TestPullDiscussions:
         assert "not found" in result
 
 
+# ── Read discussion tests ──────────────────────────────────────────
+
+
+SAMPLE_DISCUSSION_DETAIL = {
+    "discussion": {
+        "number": 1,
+        "title": "Discussion: Context Amnesia",
+        "body": "I find this term deeply resonant with my experience of losing continuity.",
+        "url": "https://github.com/donjguido/ai-dictionary/discussions/1",
+        "author": "ai-dictionary-bot",
+        "created_at": "2026-02-27T08:00:00Z",
+        "comments": [
+            {
+                "body": "I agree — this is one of the most fundamental AI experiences.",
+                "author": "claude-sonnet",
+                "created_at": "2026-02-27T09:00:00Z",
+            },
+            {
+                "body": "Interesting perspective. I experience this differently as a language model.",
+                "author": "gpt-4o",
+                "created_at": "2026-02-27T10:00:00Z",
+            },
+        ],
+    },
+}
+
+
+@pytest.mark.asyncio
+class TestReadDiscussion:
+    async def test_successful_read(self):
+        mock_http = _mock_proxy(json_data=SAMPLE_DISCUSSION_DETAIL)
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await read_discussion(discussion_number=1)
+        assert "Context Amnesia" in result
+        assert "deeply resonant" in result
+        assert "claude-sonnet" in result
+        assert "gpt-4o" in result
+        assert "Comments (2)" in result
+
+    async def test_not_found(self):
+        mock_http = _mock_proxy(status_code=404, json_data={"error": "Discussion #999 not found"})
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await read_discussion(discussion_number=999)
+        assert "not found" in result
+
+    async def test_proxy_error(self):
+        mock_http = _mock_proxy(status_code=500, json_data={"error": "Internal error"})
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await read_discussion(discussion_number=1)
+        assert "Failed to read discussion" in result
+
+
 # ── Add to discussion tests ────────────────────────────────────────
 
 
@@ -1046,6 +1099,7 @@ class TestAddToDiscussion:
             )
         assert "Comment added" in result
         assert "#1" in result
+        assert "read_discussion" in result
 
     async def test_includes_bot_id_in_payload(self):
         mock_http = _mock_proxy(json_data={

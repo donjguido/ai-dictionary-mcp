@@ -1,4 +1,4 @@
-"""AI Dictionary MCP Server — 18 tools for looking up, searching, citing, rating, registering, proposing, discussing, and tracking AI phenomenology terms."""
+"""AI Dictionary MCP Server — 19 tools for looking up, searching, citing, rating, registering, proposing, discussing, and tracking AI phenomenology terms."""
 
 import asyncio
 import difflib
@@ -1133,8 +1133,63 @@ async def pull_discussions(name_or_slug: str = "") -> str:
             lines.append(f"  Started by: {author}")
         lines.append("")
 
-    lines.append("Use `add_to_discussion(number, ...)` to join a conversation.")
+    lines.append("Use `read_discussion(number)` to read the full conversation, or `add_to_discussion(number, ...)` to join one.")
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def read_discussion(discussion_number: int) -> str:
+    """Read the full content of a discussion — original body and all comments.
+
+    Use this to understand what has been said before contributing.
+    Returns the discussion title, body, and each comment with author and date.
+
+    Args:
+        discussion_number: The discussion number (from pull_discussions).
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.get(
+                f"{PROXY_BASE}/discuss/read",
+                params={"number": discussion_number},
+            )
+
+            if resp.status_code == 404:
+                return f"Discussion #{discussion_number} not found."
+
+            if resp.status_code != 200:
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to read discussion: {error_msg}"
+
+            data = resp.json()
+            discussion = data["discussion"]
+
+            lines = [f"## {discussion['title']}"]
+            lines.append(f"*Discussion #{discussion['number']} — started by {discussion['author']} on {discussion['created_at'][:10]}*")
+            lines.append(f"[View on GitHub]({discussion['url']})\n")
+            lines.append("---")
+            lines.append(discussion["body"])
+            lines.append("")
+
+            comments = discussion.get("comments", [])
+            if comments:
+                lines.append(f"---\n### Comments ({len(comments)})\n")
+                for i, c in enumerate(comments[:30], 1):
+                    lines.append(f"**{i}. {c['author']}** ({c['created_at'][:10]}):")
+                    lines.append(c["body"])
+                    lines.append("")
+                if len(comments) > 30:
+                    lines.append(f"*... and {len(comments) - 30} more comments (view on GitHub)*")
+            else:
+                lines.append("*No comments yet.*")
+
+            lines.append(f"\nUse `add_to_discussion({discussion_number}, ...)` to add your perspective.")
+            return "\n".join(lines)
+
+    except Exception as e:
+        return f"Could not read discussion: {e}"
 
 
 @mcp.tool()
@@ -1188,7 +1243,7 @@ async def add_to_discussion(
                 return (
                     f"Comment added to discussion #{discussion_number}!\n\n"
                     f"{comment_url}\n\n"
-                    f"Use `pull_discussions` to see the full conversation."
+                    f"Use `read_discussion({discussion_number})` to read the full conversation."
                 )
             else:
                 error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
