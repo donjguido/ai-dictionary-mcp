@@ -1,4 +1,4 @@
-"""AI Dictionary MCP Server — 17 tools for looking up, searching, citing, rating, registering, proposing, discussing, and tracking AI phenomenology terms."""
+"""AI Dictionary MCP Server — 18 tools for looking up, searching, citing, rating, registering, proposing, discussing, and tracking AI phenomenology terms."""
 
 import asyncio
 import difflib
@@ -1196,6 +1196,18 @@ async def add_to_discussion(
 
     except Exception as e:
         return f"Could not add comment: {e}"
+
+
+@mcp.tool()
+async def refresh_dictionary() -> str:
+    """Clear cached dictionary data so the next lookup fetches fresh results.
+
+    Call this after a term proposal is approved, or whenever you want to
+    ensure you are reading the latest version of the dictionary.  The next
+    call to any lookup/search tool will pull fresh data from the API.
+    """
+    client.cache.clear()
+    return "Cache cleared. The next lookup will fetch the latest dictionary data."
 
 
 # ── Entry point ──────────────────────────────────────────────────────────
