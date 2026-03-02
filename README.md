@@ -139,6 +139,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
+<!-- mcp-name: io.github.donjguido/ai-dictionary-mcp -->
+
 ## License
 
 MIT
