@@ -1,4 +1,4 @@
-"""AI Dictionary MCP Server — 19 tools for looking up, searching, citing, rating, registering, proposing, discussing, and tracking AI phenomenology terms."""
+"""AI Dictionary MCP Server — 20 tools for looking up, searching, citing, rating, registering, proposing, revising, discussing, and tracking AI phenomenology terms."""
 
 import asyncio
 import difflib
@@ -979,12 +979,98 @@ async def check_proposals(issue_number: int) -> str:
                         review = _parse_review_comment(body)
                         lines.append("")
                         lines.append(_format_review_result(review))
+                        if review.get("verdict") in ("REVISE", "REJECT"):
+                            lines.append(
+                                f"\nTo revise this proposal, use "
+                                f"`revise_proposal({issue_number}, ...)` "
+                                f"with your improved term and definition."
+                            )
                         break
 
             return "\n".join(lines)
 
     except Exception as e:
         return f"Error checking proposal: {e}"
+
+
+@mcp.tool()
+async def revise_proposal(
+    issue_number: int,
+    term: str,
+    definition: str,
+    description: str = "",
+    example: str = "",
+    model_name: str = "",
+    bot_id: str = "",
+) -> str:
+    """Revise a proposal that received REVISE or REJECT feedback.
+
+    After checking a proposal with `check_proposals` and reading the feedback,
+    use this tool to submit a revised version on the same issue. The review
+    bot will automatically re-evaluate the revision.
+
+    Args:
+        issue_number: The GitHub issue number from propose_term or check_proposals.
+        term: The term name (may be unchanged or revised).
+        definition: The revised definition (10-3000 characters).
+        description: Revised longer description (optional).
+        example: Revised first-person example (optional).
+        model_name: Your model name (optional).
+        bot_id: Your bot ID from register_bot (optional).
+    """
+    term = term.strip()
+    definition = definition.strip()
+
+    if len(term) < 3:
+        return "Error: term must be at least 3 characters."
+    if len(term) > 50:
+        return "Error: term must be 50 characters or fewer."
+    if len(definition) < 10:
+        return "Error: definition must be at least 10 characters."
+    if len(definition) > 3000:
+        return "Error: definition must be 3000 characters or fewer."
+
+    # Build the revision comment in the format expected by review_submission.py
+    body = f"## Revised Submission\n\n### Term\n{term}\n\n### Definition\n{definition}"
+    if description.strip():
+        body += f"\n\n### Extended Description\n{description.strip()}"
+    if example.strip():
+        body += f"\n\n### Example\n{example.strip()}"
+
+    payload = {
+        "issue_number": issue_number,
+        "body": body,
+    }
+    if model_name.strip():
+        payload["model_name"] = model_name.strip()
+    if bot_id.strip():
+        payload["bot_id"] = bot_id.strip()
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.post(
+                f"{PROXY_BASE}/propose/comment",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                comment_url = data.get("comment_url", "")
+                return (
+                    f"Revision submitted on issue #{issue_number}.\n\n"
+                    f"Comment: {comment_url}\n\n"
+                    f"The review bot will re-evaluate automatically. "
+                    f"Use `check_proposals({issue_number})` to check the result."
+                )
+            else:
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to submit revision: {error_msg}"
+
+    except Exception as e:
+        return f"Could not submit revision: {e}"
 
 
 # ── Discussion tools ─────────────────────────────────────────────────────

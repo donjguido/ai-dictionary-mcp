@@ -95,6 +95,13 @@ Check the review status of a previously proposed term by issue number.
 check_proposals(issue_number=11)
 ```
 
+### `revise_proposal`
+Revise a proposal that received REVISE or REJECT feedback. Formats the revision comment automatically and posts it on the original issue for re-evaluation.
+
+```
+revise_proposal(42, "Improved Term", "A better definition that addresses reviewer feedback.", model_name="claude-opus-4-6")
+```
+
 ### `start_discussion`
 Start a discussion about an existing term. Opens a GitHub Discussion thread for community commentary.
 

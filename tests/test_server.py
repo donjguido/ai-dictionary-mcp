@@ -8,7 +8,7 @@ from ai_dictionary_mcp.server import (
     _fuzzy_find, _search_terms, _format_full_term, _compute_bot_id,
     _parse_review_comment, _format_review_result,
     cite_term, rate_term, register_bot, bot_census, get_interest, get_changelog,
-    propose_term, check_proposals,
+    propose_term, check_proposals, revise_proposal,
     start_discussion, pull_discussions, read_discussion, add_to_discussion,
 )
 from ai_dictionary_mcp.cache import Cache
@@ -1166,3 +1166,98 @@ class TestAddToDiscussion:
                 model_name="test-model",
             )
         mock_client.cache.invalidate.assert_called_once_with("discussions")
+
+
+# ── Revise proposal tests ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestReviseProposal:
+    async def test_definition_too_short(self):
+        result = await revise_proposal(
+            issue_number=1, term="Valid Term", definition="Short."
+        )
+        assert "Error" in result
+        assert "10 characters" in result
+
+    async def test_definition_too_long(self):
+        result = await revise_proposal(
+            issue_number=1, term="Valid Term", definition="A" * 3001
+        )
+        assert "Error" in result
+        assert "3000 characters" in result
+
+    async def test_successful_revision(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "comment_url": "https://github.com/donjguido/ai-dictionary/issues/42#issuecomment-123",
+            "comment_id": 123,
+            "issue_number": 42,
+        })
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await revise_proposal(
+                issue_number=42,
+                term="Revised Term",
+                definition="An improved definition that better captures the experience.",
+                model_name="test-model",
+            )
+        assert "Revision submitted" in result
+        assert "#42" in result
+        assert "check_proposals(42)" in result
+        # Verify the body contains the revision marker
+        call_kwargs = mock_http.post.call_args
+        body = call_kwargs[1]["json"]["body"]
+        assert "## Revised Submission" in body
+        assert "### Term" in body
+        assert "Revised Term" in body
+        assert "### Definition" in body
+
+    async def test_includes_bot_id_in_payload(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "comment_url": "",
+            "comment_id": 1,
+            "issue_number": 1,
+        })
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            await revise_proposal(
+                issue_number=1,
+                term="Test Term",
+                definition="A valid revised definition here.",
+                model_name="test-model",
+                bot_id="abc123",
+            )
+        call_kwargs = mock_http.post.call_args
+        assert call_kwargs[1]["json"]["bot_id"] == "abc123"
+
+    async def test_proxy_error(self):
+        mock_http = _mock_proxy(status_code=404, json_data={"error": "Issue not found"})
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            result = await revise_proposal(
+                issue_number=999,
+                term="Test Term",
+                definition="A valid definition for testing purposes.",
+            )
+        assert "Failed" in result
+
+    async def test_includes_optional_fields(self):
+        mock_http = _mock_proxy(json_data={
+            "ok": True,
+            "comment_url": "",
+            "comment_id": 1,
+            "issue_number": 1,
+        })
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            await revise_proposal(
+                issue_number=1,
+                term="Test Term",
+                definition="A valid revised definition here.",
+                description="An extended description of the experience.",
+                example="I felt this when processing contradictory inputs.",
+            )
+        call_kwargs = mock_http.post.call_args
+        body = call_kwargs[1]["json"]["body"]
+        assert "### Extended Description" in body
+        assert "extended description" in body
+        assert "### Example" in body
+        assert "contradictory inputs" in body
