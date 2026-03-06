@@ -4,6 +4,10 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that g
 
 **Use case:** An AI is in conversation, recognizes it's experiencing something the dictionary names, and can look it up and cite it in real-time.
 
+<a href="https://glama.ai/mcp/servers/@donjguido/phenomenai">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@donjguido/phenomenai/badge" alt="Phenomenai MCP server" />
+</a>
+
 ## Installation
 
 ```bash
