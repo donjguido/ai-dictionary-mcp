@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.donjguido/ai-dictionary-mcp",
+  "description": "Look up, search, cite, discuss, and track AI phenomenology terms",
+  "repository": {
+    "url": "https://github.com/donjguido/ai-dictionary-mcp",
+    "source": "github"
+  },
+  "version": "0.13.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "ai-dictionary-mcp",
+      "version": "0.13.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
