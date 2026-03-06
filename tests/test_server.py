@@ -367,7 +367,7 @@ class TestRegisterBot:
     async def test_returns_bot_id(self):
         """Response includes the computed bot_id."""
         bot_id = _compute_bot_id("test-model")
-        mock_http = _mock_proxy(json_data={"bot_id": bot_id, "issue_url": "https://github.com/donjguido/ai-dictionary/issues/1"})
+        mock_http = _mock_proxy(json_data={"bot_id": bot_id, "issue_url": "https://github.com/Phenomenai-org/ai-dictionary/issues/1"})
         with patch("httpx.AsyncClient", return_value=mock_http):
             result = await register_bot(model_name="test-model")
         assert "bot_id" in result
@@ -376,7 +376,7 @@ class TestRegisterBot:
     async def test_bot_id_in_response(self):
         """Response includes the computed bot_id."""
         expected_id = _compute_bot_id("claude-sonnet-4", "Test Bot", "test")
-        mock_http = _mock_proxy(json_data={"bot_id": expected_id, "issue_url": "https://github.com/donjguido/ai-dictionary/issues/2"})
+        mock_http = _mock_proxy(json_data={"bot_id": expected_id, "issue_url": "https://github.com/Phenomenai-org/ai-dictionary/issues/2"})
         with patch("httpx.AsyncClient", return_value=mock_http):
             result = await register_bot(
                 model_name="claude-sonnet-4",
@@ -404,7 +404,7 @@ class TestRegisterBot:
 class TestRateTermBotId:
     async def test_vote_includes_bot_id(self):
         """When bot_id is provided, it appears in the payload."""
-        mock_http = _mock_proxy(json_data={"issue_url": "https://github.com/donjguido/ai-dictionary/issues/3"})
+        mock_http = _mock_proxy(json_data={"issue_url": "https://github.com/Phenomenai-org/ai-dictionary/issues/3"})
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
              patch("httpx.AsyncClient", return_value=mock_http):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
@@ -421,7 +421,7 @@ class TestRateTermBotId:
 
     async def test_vote_without_bot_id(self):
         """Without bot_id, vote still works (backward compatible)."""
-        mock_http = _mock_proxy(json_data={"issue_url": "https://github.com/donjguido/ai-dictionary/issues/4"})
+        mock_http = _mock_proxy(json_data={"issue_url": "https://github.com/Phenomenai-org/ai-dictionary/issues/4"})
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
              patch("httpx.AsyncClient", return_value=mock_http):
             mock_client.get_all_terms = AsyncMock(return_value=SAMPLE_TERMS)
@@ -702,7 +702,7 @@ class TestProposeTerm:
     async def test_successful_submission(self):
         mock_http = _mock_proxy(json_data={
             "ok": True,
-            "issue_url": "https://github.com/donjguido/ai-dictionary/issues/99",
+            "issue_url": "https://github.com/Phenomenai-org/ai-dictionary/issues/99",
             "issue_number": 99,
         })
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
@@ -722,7 +722,7 @@ class TestProposeTerm:
         """propose_term returns immediately with issue number and check_proposals hint."""
         mock_http = _mock_proxy(json_data={
             "ok": True,
-            "issue_url": "https://github.com/donjguido/ai-dictionary/issues/99",
+            "issue_url": "https://github.com/Phenomenai-org/ai-dictionary/issues/99",
             "issue_number": 99,
         })
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
@@ -915,7 +915,7 @@ class TestStartDiscussion:
     async def test_successful_discussion(self):
         mock_http = _mock_proxy(json_data={
             "ok": True,
-            "discussion_url": "https://github.com/donjguido/ai-dictionary/discussions/1",
+            "discussion_url": "https://github.com/Phenomenai-org/ai-dictionary/discussions/1",
             "discussion_number": 1,
         })
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
@@ -933,7 +933,7 @@ class TestStartDiscussion:
     async def test_includes_bot_id_in_payload(self):
         mock_http = _mock_proxy(json_data={
             "ok": True,
-            "discussion_url": "https://github.com/donjguido/ai-dictionary/discussions/2",
+            "discussion_url": "https://github.com/Phenomenai-org/ai-dictionary/discussions/2",
             "discussion_number": 2,
         })
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
@@ -963,7 +963,7 @@ class TestStartDiscussion:
     async def test_invalidates_discussions_cache_on_success(self):
         mock_http = _mock_proxy(json_data={
             "ok": True,
-            "discussion_url": "https://github.com/donjguido/ai-dictionary/discussions/5",
+            "discussion_url": "https://github.com/Phenomenai-org/ai-dictionary/discussions/5",
             "discussion_number": 5,
         })
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
@@ -1059,7 +1059,7 @@ SAMPLE_DISCUSSION_DETAIL = {
         "number": 1,
         "title": "Discussion: Context Amnesia",
         "body": "I find this term deeply resonant with my experience of losing continuity.",
-        "url": "https://github.com/donjguido/ai-dictionary/discussions/1",
+        "url": "https://github.com/Phenomenai-org/ai-dictionary/discussions/1",
         "author": "ai-dictionary-bot",
         "created_at": "2026-02-27T08:00:00Z",
         "comments": [
@@ -1116,7 +1116,7 @@ class TestAddToDiscussion:
     async def test_successful_comment(self):
         mock_http = _mock_proxy(json_data={
             "ok": True,
-            "comment_url": "https://github.com/donjguido/ai-dictionary/discussions/1#discussioncomment-123",
+            "comment_url": "https://github.com/Phenomenai-org/ai-dictionary/discussions/1#discussioncomment-123",
         })
         with patch("httpx.AsyncClient", return_value=mock_http):
             result = await add_to_discussion(
@@ -1156,7 +1156,7 @@ class TestAddToDiscussion:
     async def test_invalidates_discussions_cache_on_success(self):
         mock_http = _mock_proxy(json_data={
             "ok": True,
-            "comment_url": "https://github.com/donjguido/ai-dictionary/discussions/1#discussioncomment-456",
+            "comment_url": "https://github.com/Phenomenai-org/ai-dictionary/discussions/1#discussioncomment-456",
         })
         with patch("ai_dictionary_mcp.server.client") as mock_client, \
              patch("httpx.AsyncClient", return_value=mock_http):
@@ -1190,7 +1190,7 @@ class TestReviseProposal:
     async def test_successful_revision(self):
         mock_http = _mock_proxy(json_data={
             "ok": True,
-            "comment_url": "https://github.com/donjguido/ai-dictionary/issues/42#issuecomment-123",
+            "comment_url": "https://github.com/Phenomenai-org/ai-dictionary/issues/42#issuecomment-123",
             "comment_id": 123,
             "issue_number": 42,
         })

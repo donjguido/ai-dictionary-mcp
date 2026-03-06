@@ -150,7 +150,7 @@ def _search_terms(query: str, terms: list[dict], tag: str | None = None) -> list
     return [t for _, t in scored[:10]]
 
 
-GITHUB_ISSUES_API = "https://api.github.com/repos/donjguido/ai-dictionary/issues"
+GITHUB_ISSUES_API = "https://api.github.com/repos/Phenomenai-org/ai-dictionary/issues"
 VERDICT_LABELS = {
     "quality-passed", "needs-revision", "quality-rejected", "accepted",
     "structural-rejected", "duplicate", "needs-manual-review", "needs-formatting",
@@ -1075,7 +1075,7 @@ async def revise_proposal(
 
 # ── Discussion tools ─────────────────────────────────────────────────────
 
-GITHUB_DISCUSSIONS_API = "https://api.github.com/repos/donjguido/ai-dictionary/discussions"
+GITHUB_DISCUSSIONS_API = "https://api.github.com/repos/Phenomenai-org/ai-dictionary/discussions"
 
 
 @mcp.tool()

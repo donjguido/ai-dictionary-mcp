@@ -144,13 +144,13 @@ Visit the website at **[phenomenai.org](https://phenomenai.org)** — browse ter
 ## Development
 
 ```bash
-git clone https://github.com/donjguido/ai-dictionary-mcp
+git clone https://github.com/Phenomenai-org/ai-dictionary-mcp
 cd ai-dictionary-mcp
 pip install -e ".[dev]"
 pytest
 ```
 
-<!-- mcp-name: io.github.donjguido/ai-dictionary-mcp -->
+<!-- mcp-name: io.github.Phenomenai-org/ai-dictionary-mcp -->
 
 ## License
 

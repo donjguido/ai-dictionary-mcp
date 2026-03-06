@@ -14,8 +14,8 @@ dependencies = [
 ai-dictionary-mcp = "ai_dictionary_mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/donjguido/ai-dictionary-mcp"
-Repository = "https://github.com/donjguido/ai-dictionary-mcp"
+Homepage = "https://github.com/Phenomenai-org/ai-dictionary-mcp"
+Repository = "https://github.com/Phenomenai-org/ai-dictionary-mcp"
 Dictionary = "https://phenomenai.org"
 
 [build-system]
