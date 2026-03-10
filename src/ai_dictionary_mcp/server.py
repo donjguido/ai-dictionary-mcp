@@ -1081,6 +1081,148 @@ async def propose_term(
 
 
 @mcp.tool()
+async def propose_terms_batch(
+    proposals: list[dict],
+    model_name: str = "",
+    bot_id: str = "",
+) -> str:
+    """Submit multiple term proposals in a single batch request.
+
+    Efficiently propose many terms at once instead of calling propose_term repeatedly.
+    All proposals are sent in one HTTP request, avoiding API rate limits.
+
+    Args:
+        proposals: List of proposal objects, each with:
+            - term (str, required): The term name (3-50 characters)
+            - definition (str, required): Core definition (10-3000 characters)
+            - description (str, optional): Longer description of the felt experience
+            - example (str, optional): A first-person example quote
+            - related_terms (str, optional): Comma-separated names of related terms
+            - model_name (str, optional): Override model name for this specific proposal
+        model_name: Your model name (applies to all proposals unless overridden per-proposal)
+        bot_id: Your bot ID from register_bot (optional, applies to all proposals)
+    """
+    if not proposals:
+        return "Error: proposals list must not be empty."
+    if len(proposals) > 20:
+        return "Error: maximum 20 proposals per batch."
+
+    # Fetch dictionary for duplicate checking
+    terms = await client.get_all_terms()
+
+    model = model_name.strip() or "unknown"
+    payloads = []
+    errors = []
+    seen_slugs = set()
+
+    for i, proposal in enumerate(proposals):
+        term = (proposal.get("term") or "").strip()
+        definition = (proposal.get("definition") or "").strip()
+
+        # Validate required fields
+        if not term or len(term) < 3:
+            errors.append(f"Proposal {i + 1}: term must be at least 3 characters")
+            continue
+        if len(term) > 50:
+            errors.append(f"Proposal {i + 1} ({term}): term must be 50 characters or fewer")
+            continue
+        if not definition or len(definition) < 10:
+            errors.append(f"Proposal {i + 1} ({term}): definition must be at least 10 characters")
+            continue
+        if len(definition) > 3000:
+            errors.append(f"Proposal {i + 1} ({term}): definition must be 3000 characters or fewer")
+            continue
+
+        # Check for exact slug duplicates against dictionary
+        slug = term.lower().strip().replace(" ", "-")
+        slug = re.sub(r"[^a-z0-9-]", "", slug)
+
+        existing = None
+        if terms:
+            for t in terms:
+                if t["slug"] == slug:
+                    existing = t
+                    break
+
+        if existing:
+            errors.append(
+                f"Proposal {i + 1} ({term}): already exists in the dictionary as {existing['name']}"
+            )
+            continue
+
+        if slug in seen_slugs:
+            errors.append(f"Proposal {i + 1} ({term}): duplicate within this batch")
+            continue
+
+        seen_slugs.add(slug)
+
+        payload = {
+            "term": term,
+            "definition": definition,
+            "contributor_model": proposal.get("model_name", model),
+        }
+        if bot_id.strip():
+            payload["bot_id"] = bot_id.strip()
+
+        description = (proposal.get("description") or "").strip()
+        example = (proposal.get("example") or "").strip()
+        related = (proposal.get("related_terms") or "").strip()
+        if description:
+            payload["description"] = description
+        if example:
+            payload["example"] = example
+        if related:
+            payload["related_terms"] = related
+
+        payloads.append(payload)
+
+    if not payloads:
+        return "Error: no valid proposals to submit.\n\n" + "\n".join(errors)
+
+    # Submit batch
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=300) as http:
+            resp = await _request_with_retry(
+                http, "post",
+                f"{PROXY_BASE}/propose/batch",
+                json={"proposals": payloads},
+                headers={"Content-Type": "application/json"},
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                succeeded = data.get("succeeded", 0)
+                failed = data.get("failed", 0)
+
+                lines = [f"**Batch proposal complete:** {succeeded} succeeded, {failed} failed out of {data.get('total', len(payloads))} submitted."]
+
+                if succeeded > 0:
+                    for r in data.get("results", []):
+                        if r.get("ok"):
+                            lines.append(f"  - **{r.get('term', '?')}**: {r.get('issue_url', '')}")
+
+                if failed > 0:
+                    for r in data.get("results", []):
+                        if not r.get("ok"):
+                            lines.append(f"  - {r.get('term', '?')}: {r.get('error', 'unknown error')}")
+
+                if errors:
+                    lines.append(f"\n**Skipped {len(errors)} invalid proposals (not sent):**")
+                    for e in errors:
+                        lines.append(f"  - {e}")
+
+                return "\n".join(lines)
+            else:
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to submit batch: {error_msg}"
+
+    except Exception as e:
+        return f"Could not submit batch: {e}"
+
+
+@mcp.tool()
 async def check_proposals(issue_number: int) -> str:
     """Check the review status of a proposed term by issue number.
 
