@@ -2,6 +2,13 @@
 
 ## Changelog
 
+### 2026-03-09 — Batch voting, 429 handling, exponential backoff
+
+- **MCP Server:** Added `rate_terms_batch` tool — submit up to 175 term ratings in a single request via `POST /vote/batch`. Validates all votes locally, resolves terms in one cached API call, and sends a single HTTP request to the proxy.
+- **Proxy:** Added `POST /vote/batch` endpoint to worker.js. Accepts `{ votes: [...] }`, validates each vote individually against the existing schema, creates GitHub issues sequentially, and returns per-vote results with success/failure counts.
+- **Rate limit resilience:** All HTTP calls in both `client.py` and `server.py` now handle 429 responses with `Retry-After` header parsing and exponential backoff (up to 3 retries).
+- **Polling backoff:** `_poll_review_result` now uses exponential backoff (5s → 10s → 20s → 30s cap) instead of fixed 5-second intervals.
+
 ### 2026-03-02 — Auto-invalidate discussions cache (v0.12.1)
 
 - **Cache:** Added `Cache.invalidate(key)` method to remove a single cached key on demand.

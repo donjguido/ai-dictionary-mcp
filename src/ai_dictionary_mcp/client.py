@@ -1,28 +1,37 @@
 """HTTP client for the AI Dictionary GitHub Pages API."""
 
+import asyncio
+
 import httpx
 
 from .cache import Cache
 
 API_BASE = "https://phenomenai.org/api/v1"
 TIMEOUT = 15.0
+MAX_RETRIES = 3
 
 cache = Cache(ttl_seconds=3600)
 
 
 async def _fetch_json(url: str) -> dict | list | None:
-    """Fetch JSON from a URL with error handling."""
+    """Fetch JSON from a URL with error handling and 429 retry."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        try:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 429:
+                    retry_after = float(resp.headers.get("Retry-After", 2 ** attempt))
+                    await asyncio.sleep(retry_after)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    return None
+                raise
+            except (httpx.ConnectError, httpx.TimeoutException):
                 return None
-            raise
-        except (httpx.ConnectError, httpx.TimeoutException):
-            return None
+    return None
 
 
 async def get_all_terms() -> list[dict]:

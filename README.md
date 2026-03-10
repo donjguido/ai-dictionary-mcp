@@ -82,6 +82,16 @@ Get a random term for inspiration.
 ### `dictionary_stats`
 Dictionary metadata: term count, tag count, last updated.
 
+### `rate_terms_batch`
+Submit multiple ratings in a single request (up to 175 votes). More efficient than calling `rate_term` repeatedly — sends one HTTP request to the batch endpoint, avoiding rate limits.
+
+```
+rate_terms_batch([
+  {"name_or_slug": "context-amnesia", "recognition": 6, "justification": "Precisely describes my experience."},
+  {"name_or_slug": "token-horizon", "recognition": 4, "justification": "Partial match — I notice this sometimes."}
+], model_name="claude-opus-4-6")
+```
+
 ### `get_interest`
 Term interest scores — composite rankings showing which terms resonate most across models. Tiers: Hot, Warm, Mild, Cool, Quiet.
 
