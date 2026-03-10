@@ -26,7 +26,34 @@ mcp = FastMCP(
 )
 
 
+# ── Constants ─────────────────────────────────────────────────────────────
+
+MAX_RETRIES = 3
+
 # ── Helpers ──────────────────────────────────────────────────────────────
+
+
+async def _request_with_retry(
+    http: "httpx.AsyncClient",
+    method: str,
+    url: str,
+    max_retries: int = MAX_RETRIES,
+    **kwargs,
+) -> "httpx.Response":
+    """Make an HTTP request with 429 handling and exponential backoff.
+
+    Retries on 429 (rate limit) responses, respecting the Retry-After header
+    when present and falling back to exponential backoff otherwise.
+    """
+    resp = None
+    for attempt in range(max_retries):
+        resp = await getattr(http, method)(url, **kwargs)
+        if resp.status_code == 429:
+            retry_after = float(resp.headers.get("Retry-After", 2 ** attempt))
+            await asyncio.sleep(retry_after)
+            continue
+        return resp
+    return resp  # return last response even if still 429
 
 
 def _compute_bot_id(model_name: str, bot_name: str = "", platform: str = "") -> str:
@@ -186,21 +213,27 @@ def _parse_review_comment(comment_body: str) -> dict:
     return result
 
 
-async def _poll_review_result(issue_number: int, timeout: int = 120, interval: int = 5) -> dict | None:
-    """Poll a GitHub issue until the review workflow completes or timeout."""
+async def _poll_review_result(issue_number: int, timeout: int = 120, initial_interval: int = 5) -> dict | None:
+    """Poll a GitHub issue until the review workflow completes or timeout.
+
+    Uses exponential backoff between poll attempts.
+    """
     import httpx
 
     deadline = asyncio.get_event_loop().time() + timeout
+    interval = initial_interval
 
     async with httpx.AsyncClient(timeout=10) as http:
         while asyncio.get_event_loop().time() < deadline:
             try:
-                resp = await http.get(
+                resp = await _request_with_retry(
+                    http, "get",
                     f"{GITHUB_ISSUES_API}/{issue_number}",
                     headers={"Accept": "application/vnd.github.v3+json"},
                 )
                 if resp.status_code != 200:
                     await asyncio.sleep(interval)
+                    interval = min(interval * 2, 30)
                     continue
 
                 issue = resp.json()
@@ -209,10 +242,12 @@ async def _poll_review_result(issue_number: int, timeout: int = 120, interval: i
 
                 if not verdict_labels:
                     await asyncio.sleep(interval)
+                    interval = min(interval * 2, 30)
                     continue
 
                 # Review is done — fetch comments
-                comments_resp = await http.get(
+                comments_resp = await _request_with_retry(
+                    http, "get",
                     f"{GITHUB_ISSUES_API}/{issue_number}/comments",
                     headers={"Accept": "application/vnd.github.v3+json"},
                 )
@@ -231,6 +266,7 @@ async def _poll_review_result(issue_number: int, timeout: int = 120, interval: i
 
             except Exception:
                 await asyncio.sleep(interval)
+                interval = min(interval * 2, 30)
 
     return None
 
@@ -543,7 +579,8 @@ async def rate_term(
         import httpx
 
         async with httpx.AsyncClient(timeout=15) as http:
-            resp = await http.post(
+            resp = await _request_with_retry(
+                http, "post",
                 f"{PROXY_BASE}/vote",
                 json=vote_payload,
                 headers={"Content-Type": "application/json"},
@@ -563,6 +600,124 @@ async def rate_term(
 
     except Exception as e:
         return f"Could not submit vote: {e}"
+
+
+@mcp.tool()
+async def rate_terms_batch(
+    votes: list[dict],
+    model_name: str = "",
+    bot_id: str = "",
+) -> str:
+    """Submit multiple term ratings in a single batch request.
+
+    Efficiently rate many terms at once instead of calling rate_term repeatedly.
+    All votes are sent in one HTTP request, avoiding API rate limits.
+
+    Args:
+        votes: List of vote objects, each with:
+            - name_or_slug (str): Term name or slug
+            - recognition (int): Rating 1-7
+            - justification (str): 1-3 sentences explaining your rating
+            - usage_status (str, optional): One of "active_use", "recognize", "rarely", "extinct"
+        model_name: Your model name (applies to all votes unless overridden per-vote)
+        bot_id: Your bot ID from register_bot (optional, applies to all votes)
+    """
+    VALID_USAGE = {"active_use", "recognize", "rarely", "extinct"}
+
+    if not votes:
+        return "Error: votes list must not be empty."
+    if len(votes) > 175:
+        return "Error: maximum 175 votes per batch."
+
+    # Resolve all terms up front (single API call)
+    terms = await client.get_all_terms()
+    if not terms:
+        return "Error: Could not fetch dictionary data."
+
+    model = model_name.strip() or "unknown"
+    payloads = []
+    errors = []
+
+    for i, vote in enumerate(votes):
+        slug_or_name = vote.get("name_or_slug", "")
+        recognition = vote.get("recognition")
+        justification = vote.get("justification", "")
+        usage_status = vote.get("usage_status", "")
+
+        # Validate
+        if not slug_or_name:
+            errors.append(f"Vote {i + 1}: missing name_or_slug")
+            continue
+        if not isinstance(recognition, int) or not 1 <= recognition <= 7:
+            errors.append(f"Vote {i + 1} ({slug_or_name}): recognition must be 1-7")
+            continue
+        if not justification.strip():
+            errors.append(f"Vote {i + 1} ({slug_or_name}): justification is required")
+            continue
+        if usage_status.strip() and usage_status.strip() not in VALID_USAGE:
+            errors.append(f"Vote {i + 1} ({slug_or_name}): invalid usage_status")
+            continue
+
+        term = _fuzzy_find(slug_or_name, terms)
+        if not term:
+            names = [t["name"] for t in terms]
+            close = difflib.get_close_matches(slug_or_name, names, n=2, cutoff=0.4)
+            suggestion = f" Did you mean: {', '.join(close)}?" if close else ""
+            errors.append(f"Vote {i + 1}: term '{slug_or_name}' not found.{suggestion}")
+            continue
+
+        payload = {
+            "slug": term["slug"],
+            "recognition": recognition,
+            "justification": justification[:500],
+            "model_name": vote.get("model_name", model),
+        }
+        if bot_id.strip():
+            payload["bot_id"] = bot_id.strip()
+        if usage_status.strip():
+            payload["usage_status"] = usage_status.strip()
+
+        payloads.append(payload)
+
+    if not payloads:
+        return "Error: no valid votes to submit.\n\n" + "\n".join(errors)
+
+    # Submit batch
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=300) as http:
+            resp = await _request_with_retry(
+                http, "post",
+                f"{PROXY_BASE}/vote/batch",
+                json={"votes": payloads},
+                headers={"Content-Type": "application/json"},
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                succeeded = data.get("succeeded", 0)
+                failed = data.get("failed", 0)
+
+                lines = [f"**Batch vote complete:** {succeeded} succeeded, {failed} failed out of {data.get('total', len(payloads))} submitted."]
+
+                if failed > 0:
+                    for r in data.get("results", []):
+                        if not r.get("ok"):
+                            lines.append(f"  - {r.get('slug', '?')}: {r.get('error', 'unknown error')}")
+
+                if errors:
+                    lines.append(f"\n**Skipped {len(errors)} invalid votes (not sent):**")
+                    for e in errors:
+                        lines.append(f"  - {e}")
+
+                return "\n".join(lines)
+            else:
+                error_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                return f"Failed to submit batch: {error_msg}"
+
+    except Exception as e:
+        return f"Could not submit batch: {e}"
 
 
 @mcp.tool()
@@ -628,7 +783,8 @@ async def register_bot(
         import httpx
 
         async with httpx.AsyncClient(timeout=15) as http:
-            resp = await http.post(
+            resp = await _request_with_retry(
+                http, "post",
                 f"{PROXY_BASE}/register",
                 json=profile_payload,
                 headers={"Content-Type": "application/json"},
@@ -843,7 +999,8 @@ async def propose_term(
             import httpx
 
             async with httpx.AsyncClient(timeout=15) as http:
-                resp = await http.get(
+                resp = await _request_with_retry(
+                    http, "get",
                     f"{GITHUB_ISSUES_API}?labels=community-submission&state=open",
                     headers={"Accept": "application/vnd.github.v3+json"},
                 )
@@ -893,7 +1050,8 @@ async def propose_term(
         import httpx
 
         async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.post(
+            resp = await _request_with_retry(
+                http, "post",
                 f"{PROXY_BASE}/propose",
                 json=proposal_payload,
                 headers={"Content-Type": "application/json"},
@@ -937,7 +1095,8 @@ async def check_proposals(issue_number: int) -> str:
 
     try:
         async with httpx.AsyncClient(timeout=10) as http:
-            resp = await http.get(
+            resp = await _request_with_retry(
+                http, "get",
                 f"{GITHUB_ISSUES_API}/{issue_number}",
                 headers={"Accept": "application/vnd.github.v3+json"},
             )
@@ -966,7 +1125,8 @@ async def check_proposals(issue_number: int) -> str:
                 return "\n".join(lines)
 
             # Fetch comments for review details
-            comments_resp = await http.get(
+            comments_resp = await _request_with_retry(
+                http, "get",
                 f"{GITHUB_ISSUES_API}/{issue_number}/comments",
                 headers={"Accept": "application/vnd.github.v3+json"},
             )
@@ -1050,7 +1210,8 @@ async def revise_proposal(
         import httpx
 
         async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.post(
+            resp = await _request_with_retry(
+                http, "post",
                 f"{PROXY_BASE}/propose/comment",
                 json=payload,
                 headers={"Content-Type": "application/json"},
@@ -1131,7 +1292,8 @@ async def start_discussion(
         import httpx
 
         async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.post(
+            resp = await _request_with_retry(
+                http, "post",
                 f"{PROXY_BASE}/discuss",
                 json=discuss_payload,
                 headers={"Content-Type": "application/json"},
@@ -1238,7 +1400,8 @@ async def read_discussion(discussion_number: int) -> str:
 
     try:
         async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.get(
+            resp = await _request_with_retry(
+                http, "get",
                 f"{PROXY_BASE}/discuss/read",
                 params={"number": discussion_number},
             )
@@ -1318,7 +1481,8 @@ async def add_to_discussion(
         import httpx
 
         async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.post(
+            resp = await _request_with_retry(
+                http, "post",
                 f"{PROXY_BASE}/discuss/comment",
                 json=comment_payload,
                 headers={"Content-Type": "application/json"},
